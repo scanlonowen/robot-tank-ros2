@@ -70,33 +70,73 @@
     <canvas id="hiddenCanvas" style="display:none;"></canvas>
   </main>
 
-  <!-- Load OpenCV.js first; call `onOpenCvReady()` when loaded -->
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
+  <!-- Load OpenCV.js -->
   <script>
-    function onOpenCvReady() {
-      // Wait for runtime if needed
-      if (typeof cv === 'undefined') {
-        // In rare cases, script isn't ready at onload, so fallback:
-        setTimeout(onOpenCvReady, 100);
-        return;
-      }
-      if (cv.getBuildInformation) {
-        document.addEventListener('DOMContentLoaded', mainInit);
-      } else if (cv['onRuntimeInitialized']) {
-        // Already set, but keep for completeness
-        cv['onRuntimeInitialized'] = () => document.addEventListener('DOMContentLoaded', mainInit);
-      } else {
-        // Set custom runtime initializer if not present
-        cv['onRuntimeInitialized'] = () => document.dispatchEvent(
-          new Event('DOMContentLoaded')
-        );
-        document.addEventListener('DOMContentLoaded', mainInit);
+    let cvReady = false;
+    let domReady = false;
+
+    function checkReady() {
+      if (cvReady && domReady) {
+        mainInit();
       }
     }
+
+    // OpenCV loading with better error handling
+    function loadOpenCV() {
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://docs.opencv.org/4.x/opencv.js';
+      
+      script.onload = () => {
+        if (typeof cv === 'undefined') {
+          console.log('Waiting for OpenCV to initialize...');
+          setTimeout(() => {
+            if (typeof cv !== 'undefined') {
+              if (cv.getBuildInformation) {
+                cvReady = true;
+                checkReady();
+              } else {
+                cv['onRuntimeInitialized'] = () => {
+                  cvReady = true;
+                  checkReady();
+                };
+              }
+            }
+          }, 100);
+        } else {
+          if (cv.getBuildInformation) {
+            cvReady = true;
+            checkReady();
+          } else {
+            cv['onRuntimeInitialized'] = () => {
+              cvReady = true;
+              checkReady();
+            };
+          }
+        }
+      };
+      
+      script.onerror = () => {
+        console.error('Failed to load OpenCV.js');
+        document.getElementById('status').textContent = 'Error: Failed to load OpenCV.js';
+      };
+      
+      document.head.appendChild(script);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      domReady = true;
+      checkReady();
+    });
+
+    // Start loading OpenCV immediately
+    loadOpenCV();
 
     // ===================== MAIN APP LOGIC =====================
 
     function mainInit() {
+      console.log('Initializing app with OpenCV version:', cv.getBuildInformation());
+      
       // ---------- DOM ----------
       const $ = id => document.getElementById(id);
       const startBtn     = $('startBtn');
@@ -125,6 +165,7 @@
         const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
         return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : null;
       }
+      
       function rgbToHsv(r,g,b) {
         r/=255; g/=255; b/=255;
         const max=Math.max(r,g,b), min=Math.min(r,g,b);
@@ -140,11 +181,12 @@
         }
         return { h: Math.round(h*179), s: Math.round(s*255), v: Math.round(v*255) }; // OpenCV ranges
       }
+      
       function setColorThresholds(hexColor) {
         const rgb = hexToRgb(hexColor);
         if (!rgb) return;
         const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
-        const hueTol = 12, minS=70, minV=70;
+        const hueTol = 15, minS=50, minV=50;
         let hmin = hsv.h - hueTol, hmax = hsv.h + hueTol;
 
         if (hmin < 0) {
@@ -152,21 +194,31 @@
           trackingParams.high1 = [hmax,255,  255,  255];
           trackingParams.low2  = [180+hmin, minS, minV, 0];
           trackingParams.high2 = [179, 255,  255,  255];
+          trackingParams.useSecondRange = true;
         } else if (hmax > 179) {
           trackingParams.low1  = [hmin, minS, minV, 0];
           trackingParams.high1 = [179,  255,  255,  255];
           trackingParams.low2  = [0,    minS, minV, 0];
           trackingParams.high2 = [hmax-180,255,255,255];
+          trackingParams.useSecondRange = true;
         } else {
           trackingParams.low1  = [hmin, minS, minV, 0];
           trackingParams.high1 = [hmax, 255,  255,  255];
-          trackingParams.low2  = [0,0,0,0];
-          trackingParams.high2 = [0,0,0,0];
+          trackingParams.useSecondRange = false;
         }
       }
 
       // ---------- Cleanup ----------
-      const safeDelete = x => { try { if (x && typeof x.delete === 'function') x.delete(); } catch(_){} };
+      const safeDelete = x => { 
+        try { 
+          if (x && typeof x.delete === 'function') {
+            x.delete(); 
+          }
+        } catch(e) {
+          console.warn('Error deleting OpenCV object:', e);
+        } 
+      };
+      
       function cleanupCvObjects() {
         Object.values(cvObjects).forEach(safeDelete);
         cvObjects = {};
@@ -175,7 +227,10 @@
 
       stopBtn.addEventListener('click', () => {
         loopActive = false;
-        if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+        if (stream) { 
+          stream.getTracks().forEach(t => t.stop()); 
+          stream = null; 
+        }
         videoEl.srcObject = null;
         cleanupCvObjects();
         isCvInitialized = false;
@@ -183,7 +238,9 @@
         startBtn.disabled = false;
         stopBtn.disabled = true;
         const ctx = overlayEl.getContext('2d');
-        ctx && ctx.clearRect(0,0,overlayEl.width||0, overlayEl.height||0);
+        if (ctx) {
+          ctx.clearRect(0, 0, overlayEl.width || 0, overlayEl.height || 0);
+        }
         vxEl.textContent = '0.00';
         wzEl.textContent = '0.00';
       });
@@ -199,155 +256,223 @@
         isCvInitialized = false;
 
         try {
-          // 1) Load OpenCV (it's already loaded when we're here)
           statusEl.innerHTML = `
             <div class="flex items-center">
               <div class="spinner"></div>
-              <span class="ml-2 font-medium">Vision library loaded…</span>
+              <span class="ml-2 font-medium">Starting camera...</span>
             </div>`;
-          await Promise.resolve(); // just let UI update
 
-          // 2) Camera
-          statusEl.textContent = 'Requesting camera access…';
+          // Request camera
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { width:{ideal:640}, height:{ideal:480}, facingMode:'user' },
+            video: { 
+              width: { ideal: 640 }, 
+              height: { ideal: 480 }, 
+              facingMode: 'user' 
+            },
             audio: false
           });
+          
           videoEl.srcObject = stream;
 
-          await new Promise(res => { videoEl.onloadedmetadata = res; });
+          // Wait for video to be ready
+          await new Promise((resolve, reject) => {
+            videoEl.onloadedmetadata = resolve;
+            videoEl.onerror = reject;
+            setTimeout(() => reject(new Error('Video loading timeout')), 10000);
+          });
+
           await videoEl.play();
           stopBtn.disabled = false;
-          statusEl.textContent = 'Starting analysis…';
+          statusEl.textContent = 'Initializing computer vision...';
 
-          // 3) Main loop
+          // Give video a moment to start streaming
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Main processing loop
           const hiddenCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-          let frameCounter = 0; // Reset counter on start
+          let frameCounter = 0;
 
-          const onFrame = () => {
+          const processFrame = () => {
             if (!loopActive) return;
 
-            // --- OPTIMIZATION: Process every other frame to reduce CPU load ---
             frameCounter++;
-            if (frameCounter % 2 !== 0) {
-                requestAnimationFrame(onFrame);
-                return;
+            // Process every 3rd frame for better performance
+            if (frameCounter % 3 !== 0) {
+              requestAnimationFrame(processFrame);
+              return;
             }
 
-            let contours = new cv.MatVector();
-            let hierarchy = new cv.Mat();
-            let largestContour = null;
-
             try {
-              const w = videoEl.videoWidth, h = videoEl.videoHeight;
-              if (!w || !h) { requestAnimationFrame(onFrame); return; }
+              const w = videoEl.videoWidth;
+              const h = videoEl.videoHeight;
+              
+              if (!w || !h) {
+                requestAnimationFrame(processFrame);
+                return;
+              }
 
+              // Initialize OpenCV objects on first frame
               if (!isCvInitialized) {
-                overlayEl.width = w; overlayEl.height = h;
-                hiddenCanvas.width = w; hiddenCanvas.height = h;
+                overlayEl.width = w;
+                overlayEl.height = h;
+                hiddenCanvas.width = w;
+                hiddenCanvas.height = h;
 
-                cvObjects.bgr     = new cv.Mat(h, w, cv.CV_8UC3);
-                cvObjects.hsv     = new cv.Mat(h, w, cv.CV_8UC3);
-                cvObjects.mask1   = new cv.Mat();
-                cvObjects.mask2   = new cv.Mat();
-                cvObjects.mask    = new cv.Mat();
-                cvObjects.opened  = new cv.Mat();
-                cvObjects.closed  = new cv.Mat();
-                cvObjects.kernel  = cv.Mat.ones(3, 3, cv.CV_8U);
+                // Create OpenCV matrices
+                cvObjects.frame = new cv.Mat(h, w, cv.CV_8UC4);
+                cvObjects.hsv = new cv.Mat(h, w, cv.CV_8UC3);
+                cvObjects.mask1 = new cv.Mat();
+                cvObjects.mask2 = new cv.Mat();
+                cvObjects.mask = new cv.Mat();
+                cvObjects.morphed = new cv.Mat();
+                cvObjects.kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
 
                 setColorThresholds(colorPicker.value);
                 isCvInitialized = true;
-                statusEl.textContent = 'Running analysis…';
+                statusEl.textContent = 'Computer vision active - show colored objects!';
               }
 
+              // Capture frame
               hiddenCtx.drawImage(videoEl, 0, 0, w, h);
-              let rgba = cv.imread(hiddenCanvas);
-              cv.cvtColor(rgba, cvObjects.bgr, cv.COLOR_RGBA2BGR);
-              safeDelete(rgba);
+              const imageData = hiddenCtx.getImageData(0, 0, w, h);
+              cvObjects.frame.data.set(imageData.data);
 
-              cv.cvtColor(cvObjects.bgr, cvObjects.hsv, cv.COLOR_BGR2HSV);
-              const low1  = new cv.Scalar(...trackingParams.low1);
+              // Convert to HSV
+              cv.cvtColor(cvObjects.frame, cvObjects.hsv, cv.COLOR_RGBA2RGB);
+              cv.cvtColor(cvObjects.hsv, cvObjects.hsv, cv.COLOR_RGB2HSV);
+
+              // Create mask
+              const low1 = new cv.Scalar(...trackingParams.low1);
               const high1 = new cv.Scalar(...trackingParams.high1);
-              const low2  = new cv.Scalar(...trackingParams.low2);
-              const high2 = new cv.Scalar(...trackingParams.high2);
-
               cv.inRange(cvObjects.hsv, low1, high1, cvObjects.mask1);
-              cv.inRange(cvObjects.hsv, low2, high2, cvObjects.mask2);
-              safeDelete(low1); safeDelete(high1); safeDelete(low2); safeDelete(high2);
 
-              cv.bitwise_or(cvObjects.mask1, cvObjects.mask2, cvObjects.mask);
-              cv.morphologyEx(cvObjects.mask,   cvObjects.opened, cv.MORPH_OPEN,  cvObjects.kernel);
-              cv.morphologyEx(cvObjects.opened, cvObjects.closed, cv.MORPH_CLOSE, cvObjects.kernel);
+              if (trackingParams.useSecondRange) {
+                const low2 = new cv.Scalar(...trackingParams.low2);
+                const high2 = new cv.Scalar(...trackingParams.high2);
+                cv.inRange(cvObjects.hsv, low2, high2, cvObjects.mask2);
+                cv.bitwise_or(cvObjects.mask1, cvObjects.mask2, cvObjects.mask);
+                low2.delete();
+                high2.delete();
+              } else {
+                cvObjects.mask1.copyTo(cvObjects.mask);
+              }
 
-              let vx = 0, wz = 0;
+              low1.delete();
+              high1.delete();
+
+              // Morphological operations
+              cv.morphologyEx(cvObjects.mask, cvObjects.morphed, cv.MORPH_OPEN, cvObjects.kernel);
+              cv.morphologyEx(cvObjects.morphed, cvObjects.morphed, cv.MORPH_CLOSE, cvObjects.kernel);
+
+              // Clear overlay
               const ctx = overlayEl.getContext('2d');
               ctx.clearRect(0, 0, w, h);
 
+              let vx = 0, wz = 0;
+
               if (maskToggle.checked) {
-                cv.imshow('overlay', cvObjects.closed);
+                // Show mask
+                cv.imshow('overlay', cvObjects.morphed);
               } else {
-                cv.findContours(cvObjects.closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                // Find contours and track object
+                const contours = new cv.MatVector();
+                const hierarchy = new cv.Mat();
+                
+                cv.findContours(cvObjects.morphed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                
                 if (contours.size() > 0) {
+                  let largestContour = null;
                   let largestArea = 0;
+                  
                   for (let i = 0; i < contours.size(); i++) {
-                    const tempContour = contours.get(i);
-                    const area = cv.contourArea(tempContour);
-                    if (area > largestArea) {
+                    const contour = contours.get(i);
+                    const area = cv.contourArea(contour);
+                    
+                    if (area > largestArea && area > 500) { // Minimum area threshold
+                      if (largestContour) largestContour.delete();
+                      largestContour = contour;
                       largestArea = area;
-                      safeDelete(largestContour); // Delete previous
-                      largestContour = tempContour;
                     } else {
-                      safeDelete(tempContour);
+                      contour.delete();
                     }
                   }
+                  
                   if (largestContour) {
-                    const m = cv.moments(largestContour);
-                    if (m.m00 > 0) {
-                      const cx = m.m10 / m.m00;
-                      const cy = m.m01 / m.m00;
-
+                    const moments = cv.moments(largestContour);
+                    if (moments.m00 > 0) {
+                      const cx = moments.m10 / moments.m00;
+                      const cy = moments.m01 / moments.m00;
+                      
+                      // Calculate control values
                       let err = (cx - (w/2)) / (w/2);
                       if (Math.abs(err) < 0.05) err = 0.0;
-                      wz = Math.max(-1, Math.min(1, -1.2 * err));
-
+                      wz = Math.max(-1, Math.min(1, -1.5 * err));
+                      
                       const frac = largestArea / (w * h);
-                      const ef = 0.020 - frac;
-                      vx = Math.abs(ef) < 0.004 ? 0.0 : Math.max(-1, Math.min(1, ef / 0.020));
-
+                      const ef = 0.025 - frac;
+                      vx = Math.abs(ef) < 0.005 ? 0.0 : Math.max(-1, Math.min(1, ef / 0.025));
+                      
+                      // Draw center point
                       ctx.beginPath();
-                      ctx.arc(cx, cy, 8, 0, 2*Math.PI);
-                      ctx.fillStyle = 'rgba(0, 255, 0, 0.85)';
+                      ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
+                      ctx.fillStyle = 'rgba(0, 255, 0, 0.8)';
                       ctx.fill();
+                      ctx.lineWidth = 3;
+                      ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+                      ctx.stroke();
+                      
+                      // Draw contour
+                      ctx.strokeStyle = 'rgba(0, 255, 0, 0.6)';
                       ctx.lineWidth = 2;
-                      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                      ctx.beginPath();
+                      for (let i = 0; i < largestContour.rows; i++) {
+                        const point = largestContour.intAt(i, 0);
+                        if (i === 0) {
+                          ctx.moveTo(point[0], point[1]);
+                        } else {
+                          ctx.lineTo(point[0], point[1]);
+                        }
+                      }
+                      ctx.closePath();
                       ctx.stroke();
                     }
+                    largestContour.delete();
                   }
                 }
+                
+                contours.delete();
+                hierarchy.delete();
               }
 
               vxEl.textContent = vx.toFixed(2);
               wzEl.textContent = wz.toFixed(2);
+
             } catch (err) {
-              console.error('Error in onFrame:', err);
-              if (loopActive) stopBtn.click();
-            } finally {
-              safeDelete(contours);
-              safeDelete(hierarchy);
-              safeDelete(largestContour);
+              console.error('Error in processing loop:', err);
+              statusEl.textContent = 'Error: ' + err.message;
+              stopBtn.click();
             }
 
-            requestAnimationFrame(onFrame);
+            requestAnimationFrame(processFrame);
           };
 
-          requestAnimationFrame(onFrame);
+          requestAnimationFrame(processFrame);
+
         } catch (err) {
           console.error('Error during startup:', err);
           statusEl.textContent = 'Error: ' + err.message;
           startBtn.disabled = false;
           stopBtn.disabled = true;
+          loopActive = false;
+          if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+            stream = null;
+          }
         }
       });
+
+      // Initial status
+      statusEl.textContent = 'Ready! Click Start to begin.';
     }
   </script>
 </body>
