@@ -1,101 +1,72 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ROS2 Tank Robot — Owen Scanlon</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-  <link rel="stylesheet" href="styles.css">
-  <!-- highlight.js for pretty code blocks -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-  <script>window.addEventListener('DOMContentLoaded',()=>hljs.highlightAll());</script>
-  <!-- OpenCV (WASM) -->
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()" onerror="onOpenCvError()"></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ROS2 Tank — OpenCV.js Demo</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+  .hero{padding:2.5rem 0;background:#0f172a;color:#e2e8f0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+  video,canvas{width:100%;height:auto;border-radius:12px;background:#0b1020}
+  .controls{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:.75rem 0}
+  pre{background:#0b1020;color:#c7d2fe;border-radius:12px;padding:12px}
+</style>
+<!-- OpenCV (WASM) -->
+<script async src="https://docs.opencv.org/4.x/opencv.js"
+        onload="onOpenCvReady()" onerror="onOpenCvError()"></script>
 </head>
 <body>
   <nav class="container-fluid">
     <ul><li><strong>ROS2 Tank Robot</strong></li></ul>
     <ul>
       <li><a href="#demo">Demo</a></li>
-      <li><a href="#arch">Architecture</a></li>
-      <li><a href="#code">Code</a></li>
-      <li><a href="#about">About</a></li>
+      <li><a href="https://github.com/scanlonowen/robot-tank-ros2">GitHub</a></li>
     </ul>
   </nav>
 
   <header class="hero">
     <div class="container">
       <h1>Tracked robot with ROS 2 + OpenCV</h1>
-      <p>Webcam red-object tracking in-browser, plus the on-robot ROS 2 stack (Pi 5 ↔ Pi Zero 2 ↔ Arduino).</p>
-      <a class="contrast" href="resume.pdf">Resume (PDF)</a>
+      <p>Webcam red-object tracking in-browser. HSV mask → centroid → velocity hints (vx, wz).</p>
     </div>
   </header>
 
-  <main class="container">
-    <section id="demo">
-      <h2>Live OpenCV.js Demo</h2>
-      <p>HSV mask → centroid → velocity hints (vx, wz). Runs fully in your browser.</p>
-      <div class="grid">
-        <article><video id="video" playsinline autoplay muted></video></article>
-        <article><canvas id="canvas"></canvas></article>
-      </div>
-      <div class="controls">
-        <button id="startBtn" disabled>Start</button>
-        <button id="stopBtn" disabled>Stop</button>
-        <label>Resolution
-          <select id="resSelect"><option>640x480</option><option>1280x720</option></select>
-        </label>
-        <label>Hue <input type="number" id="hLow" value="0" min="0" max="179">–<input type="number" id="hHigh" value="10" min="0" max="179"></label>
-        <label>S/V min <input type="number" id="sMin" value="120" min="0" max="255"> / <input type="number" id="vMin" value="120" min="0" max="255"></label>
-      </div>
-      <pre id="stats">Loading OpenCV…</pre>
-    </section>
+  <main class="container" id="demo">
+    <h2>Live OpenCV.js Demo</h2>
+    <div class="grid2">
+      <article><h4>Camera</h4><video id="video" playsinline autoplay muted></video></article>
+      <article><h4>Processed</h4><canvas id="canvas"></canvas></article>
+    </div>
 
-    <section id="arch">
-      <h2>System Architecture</h2>
-      <div class="grid">
-        <article>
-          <img src="web/architecture.png" alt="System architecture">
-        </article>
-        <article>
-          <ul>
-            <li>Raspberry Pi 5 (Ubuntu 24.04, ROS 2 Jazzy): vision + control</li>
-            <li>Pi Zero 2: joystick → Twist messages</li>
-            <li>Arduino Mega + TB6600: steppers via AccelStepper</li>
-            <li>Ultrasonic sensors; roadmap: LiDAR + nav stack</li>
-          </ul>
-        </article>
-      </div>
-    </section>
+    <div class="controls">
+      <button id="startBtn" disabled>Start</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <label>Resolution
+        <select id="resSelect"><option>640x480</option><option>1280x720</option></select>
+      </label>
+      <label>Hue <input type="number" id="hLow" value="0" min="0" max="179">–<input type="number" id="hHigh" value="10" min="0" max="179"></label>
+      <label>S/V min <input type="number" id="sMin" value="120" min="0" max="255"> / <input type="number" id="vMin" value="120" min="0" max="255"></label>
+    </div>
 
-    <section id="code">
-      <h2>Code</h2>
-      <p>
-        <a href="src/">Browse /src</a>
-        <!-- OR link the separate repo -->
-        <!-- <a href="https://github.com/scanlonowen/robot-tank-ros2-code">robot-tank-ros2-code</a> -->
-      </p>
-
-      <!-- Example pretty snippet (copy one of your real files here) -->
-      <pre><code class="language-python">
-import cv2
-def find_red_centroid(frame_hsv):
-    lower1, upper1 = (0,120,120), (10,255,255)
-    lower2, upper2 = (170,120,120), (179,255,255)
-    mask = cv2.inRange(frame_hsv, lower1, upper1) | cv2.inRange(frame_hsv, lower2, upper2)
-    m = cv2.moments(mask)
-    return (int(m["m10"]/m["m00"]), int(m["m01"]/m["m00"])) if m["m00"] else None
-      </code></pre>
-    </section>
-
-    <section id="about">
-      <h2>About</h2>
-      <p>Built by Owen Scanlon — Computer Engineering @ UMN. <a href="mailto:...">Email</a> · <a href="https://www.linkedin.com/in/scanlonowen/">LinkedIn</a></p>
-    </section>
+    <pre id="stats">Loading OpenCV…</pre>
   </main>
 
-  <footer class="container"><small>© Owen Scanlon</small></footer>
-  <script src="main.js"></script>
-</body>
-</html>
+<script>
+let video, canvas, ctx, stream, rafId;
+let cap, src, hsv, mask1, mask2, mask, kernel, contours, hierarchy;
+let running=false;
+const $=id=>document.getElementById(id);
+
+function onOpenCvReady(){ $('stats').textContent='OpenCV loaded. Click Start.'; $('startBtn').disabled=false; }
+function onOpenCvError(){ $('stats').textContent='Failed to load OpenCV.js'; }
+
+async function start(){
+  const [w,h]=$('resSelect').value.split('x').map(Number);
+  stream=await navigator.mediaDevices.getUserMedia({video:{width:w,height:h},audio:false});
+  video.srcObject=stream; await video.play();
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+
+  cap=new cv.VideoCapture(video);
+  src=new cv.Mat(video.
