@@ -46,8 +46,6 @@
         wz: <span id="wz" class="font-bold text-yellow-400">0.00</span>
     </div>
 
-    <!-- Load OpenCV.js -->
-    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
     <script>
         // --- DOM Elements ---
         const $ = id => document.getElementById(id);
@@ -59,16 +57,18 @@
         const wzEl = $('wz');
         let loopActive = false;
 
-        // --- Promise to wait for OpenCV.js to load ---
+        // --- Promise to wait for OpenCV.js to load (ROBUST METHOD) ---
+        // This MUST be defined before the opencv.js script tag is included.
+        // OpenCV.js's loader (Emscripten) looks for a 'Module' object on the window
+        // to hook into its lifecycle events.
         const cvReady = new Promise(resolve => {
-            // Check if cv is already available
-            if (window.cv) {
-                resolve();
-            } else {
-                // If not, set a callback for when it's initialized
-                window.cv = window.cv || {};
-                cv.onRuntimeInitialized = resolve;
-            }
+            window.Module = {
+                onRuntimeInitialized: () => {
+                    // This function is called when the OpenCV WASM runtime is fully initialized.
+                    // We can now safely use the 'cv' object.
+                    resolve();
+                }
+            };
         });
 
         // --- Main application logic ---
@@ -228,5 +228,9 @@
             }
         };
     </script>
+    
+    <!-- Load OpenCV.js AFTER the main script has defined the Module callback -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 </body>
 </html>
+
