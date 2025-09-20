@@ -6,85 +6,118 @@
 <title>Robot Tank — Red Object Follower</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 16px; text-align: center; }
-  canvas { width: 640px; height: 480px; background: #111; border-radius: 12px; }
-  .kv { font-family: ui-monospace, monospace; margin: 12px 0; font-size: 1.2em; }
+  #view { width: 640px; height: 480px; background:#111; border-radius:12px }
+  /* keep the <video> off-screen but present */
+  #cam { position: absolute; left: -9999px; width:0; height:0; }
+  .kv { font-family: ui-monospace, monospace; margin: 12px 0; font-size: 1.1em; }
 </style>
 </head>
 <body>
 <h1>Robot Tank — Red Object Follower (Web Demo)</h1>
-<p>Allow camera access. Hold a red object and watch the overlay + <code>vx</code>, <code>wz</code> update.</p>
+<p>Allow camera access. Hold a red object; the green dot is the centroid, yellow line is the center.</p>
 
+<video id="cam" playsinline muted></video>
 <canvas id="view"></canvas>
 <div class="kv">vx: <span id="vx">0.00</span>, wz: <span id="wz">0.00</span></div>
 
-<!-- OpenCV.js -->
 <script async src="https://docs.opencv.org/4.x/opencv.js"
         onload="cv['onRuntimeInitialized']=onCvReady"></script>
 <script>
 let cap, src, bgr, hsv, mask1, mask2, mask, opened, closed, contours, hierarchy;
-const S={target_frac:0.020, tol_frac:0.004, turn_gain:1.2};
-const $=id=>document.getElementById(id);
+const P = { target_frac: 0.020, tol_frac: 0.004, turn_gain: 1.2 };
+const $ = id => document.getElementById(id);
 
-async function setupCam(){
-  const cam=document.createElement('video');
-  cam.setAttribute("playsinline","true");
-  const stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:false});
-  cam.srcObject=stream; await cam.play(); return cam;
+async function setupCam() {
+  const cam = $('cam');
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: 640, height: 480 }, audio: false
+  });
+  cam.srcObject = stream;
+  await new Promise(res => cam.onloadedmetadata = res); // wait for real dims
+  await cam.play();
+  return cam;
 }
 
 function onCvReady(){ main().catch(console.error); }
 
 async function main(){
-  const cam=await setupCam();
-  const canvas=$('view'); canvas.width=cam.videoWidth; canvas.height=cam.videoHeight;
-  const ctx=canvas.getContext('2d');
+  // 1) Camera ready
+  const cam = await setupCam();
 
-  cap=new cv.VideoCapture(cam);
-  src=new cv.Mat(cam.videoHeight,cam.videoWidth,cv.CV_8UC4);
-  bgr=new cv.Mat(cam.videoHeight,cam.videoWidth,cv.CV_8UC3);
-  hsv=new cv.Mat(cam.videoHeight,cam.videoWidth,cv.CV_8UC3);
-  mask1=new cv.Mat(); mask2=new cv.Mat(); mask=new cv.Mat(); opened=new cv.Mat(); closed=new cv.Mat();
-  contours=new cv.MatVector(); hierarchy=new cv.Mat();
-  const low1=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[0,120,70,0]);
-  const high1=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[10,255,255,0]);
-  const low2=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[170,120,70,0]);
-  const high2=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[180,255,255,0]);
-  const kernel=cv.Mat.ones(5,5,cv.CV_8U);
+  // 2) Canvas
+  const canvas = $('view');
+  canvas.width  = cam.videoWidth;
+  canvas.height = cam.videoHeight;
+  const ctx = canvas.getContext('2d');
+
+  // 3) OpenCV mats
+  cap  = new cv.VideoCapture(cam);
+  src  = new cv.Mat(cam.videoHeight, cam.videoWidth, cv.CV_8UC4);
+  bgr  = new cv.Mat(cam.videoHeight, cam.videoWidth, cv.CV_8UC3);
+  hsv  = new cv.Mat(cam.videoHeight, cam.videoWidth, cv.CV_8UC3);
+  mask1 = new cv.Mat(); mask2 = new cv.Mat(); mask = new cv.Mat();
+  opened = new cv.Mat(); closed = new cv.Mat();
+  contours = new cv.MatVector(); hierarchy = new cv.Mat();
+
+  // Red thresholds (slightly relaxed for mixed lighting)
+  const low1  = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0,  80, 40, 0]);
+  const high1 = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [10, 255,255,0]);
+  const low2  = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [170,80, 40, 0]);
+  const high2 = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180,255,255,0]);
+  const kernel = cv.Mat.ones(5,5,cv.CV_8U);
 
   function tick(){
     cap.read(src);
-    cv.cvtColor(src,bgr,cv.COLOR_RGBA2BGR);
-    cv.cvtColor(bgr,hsv,cv.COLOR_BGR2HSV);
-    cv.inRange(hsv,low1,high1,mask1);
-    cv.inRange(hsv,low2,high2,mask2);
-    cv.bitwise_or(mask1,mask2,mask);
-    cv.morphologyEx(mask,opened,cv.MORPH_OPEN,kernel);
-    cv.morphologyEx(opened,closed,cv.MORPH_CLOSE,kernel);
-    cv.findContours(closed,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+    cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
+    cv.cvtColor(bgr, hsv, cv.COLOR_BGR2HSV);
+    cv.inRange(hsv, low1, high1, mask1);
+    cv.inRange(hsv, low2, high2, mask2);
+    cv.bitwise_or(mask1, mask2, mask);
+    cv.morphologyEx(mask, opened, cv.MORPH_OPEN, kernel);
+    cv.morphologyEx(opened, closed, cv.MORPH_CLOSE, kernel);
+    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    let vx=0.0, wz=0.0;
-    ctx.drawImage(cam,0,0,canvas.width,canvas.height);
+    let vx = 0.0, wz = 0.0;
+    // draw the camera frame
+    ctx.drawImage(cam, 0, 0, canvas.width, canvas.height);
 
-    if(contours.size()>0){
-      let idx=0,maxA=0;
-      for(let i=0;i<contours.size();i++){const a=cv.contourArea(contours.get(i));if(a>maxA){maxA=a;idx=i;}}
-      const c=contours.get(idx); const m=cv.moments(c);
-      if(m.m00>0){
-        const cx=m.m10/m.m00, cy=m.m01/m.m00, cx0=canvas.width/2;
-        let err=(cx-cx0)/cx0; if(Math.abs(err)<0.05) err=0.0;
-        wz=Math.max(-1,Math.min(1,-S.turn_gain*err));
-        const img=canvas.width*canvas.height, frac=maxA/img, ef=S.target_frac-frac;
-        vx=Math.abs(ef)<S.tol_frac?0.0:Math.max(-1,Math.min(1,ef/S.target_frac));
-        ctx.beginPath(); ctx.moveTo(cx0,0); ctx.lineTo(cx0,canvas.height);
-        ctx.lineWidth=2; ctx.strokeStyle='#ffff00'; ctx.stroke();
-        ctx.beginPath(); ctx.arc(cx,cy,6,0,2*Math.PI);
-        ctx.fillStyle='#00ff00'; ctx.fill();
+    if (contours.size() > 0){
+      // largest blob
+      let maxIdx = 0, maxA = 0;
+      for (let i=0;i<contours.size();i++){
+        const a = cv.contourArea(contours.get(i));
+        if (a > maxA){ maxA = a; maxIdx = i; }
+      }
+      const c = contours.get(maxIdx);
+      const m = cv.moments(c);
+      if (m.m00 > 0){
+        const cx = m.m10 / m.m00, cy = m.m01 / m.m00;
+        const centerX = canvas.width / 2;
+
+        // control (same math as ROS node)
+        let err = (cx - centerX) / centerX;
+        if (Math.abs(err) < 0.05) err = 0.0;
+        wz = Math.max(-1, Math.min(1, -P.turn_gain * err));
+
+        const imgArea = canvas.width * canvas.height;
+        const areaFrac = maxA / imgArea;
+        const errFrac  = P.target_frac - areaFrac;
+        vx = Math.abs(errFrac) < P.tol_frac ? 0.0 :
+             Math.max(-1, Math.min(1, errFrac / P.target_frac));
+
+        // overlays
+        ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, canvas.height);
+        ctx.lineWidth = 2; ctx.strokeStyle = '#ffff00'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 2*Math.PI);
+        ctx.fillStyle = '#00ff00'; ctx.fill();
       }
     }
-    $('vx').textContent=vx.toFixed(2);
-    $('wz').textContent=wz.toFixed(2);
+
+    $('vx').textContent = vx.toFixed(2);
+    $('wz').textContent = wz.toFixed(2);
     requestAnimationFrame(tick);
   }
+
   requestAnimationFrame(tick);
 }
 </script>
