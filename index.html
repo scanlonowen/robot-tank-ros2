@@ -69,4 +69,60 @@ async function start(){
   canvas.width=video.videoWidth; canvas.height=video.videoHeight;
 
   cap=new cv.VideoCapture(video);
-  src=new cv.Mat(video.
+  src=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC4);
+  hsv=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC3);
+  mask1=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC1);
+  mask2=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC1);
+  mask =new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC1);
+  kernel=cv.getStructuringElement(cv.MORPH_ELLIPSE,new cv.Size(5,5));
+  contours=new cv.MatVector(); hierarchy=new cv.Mat();
+
+  running=true; $('stopBtn').disabled=false; loop();
+}
+function stop(){
+  running=false; if(rafId) cancelAnimationFrame(rafId);
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  [cap,src,hsv,mask1,mask2,mask,kernel,contours,hierarchy].forEach(m=>{try{m.delete();}catch{}});
+  $('stopBtn').disabled=true; $('stats').textContent+='\\nStopped.';
+}
+function loop(){
+  if(!running) return;
+  cap.read(src);
+  cv.cvtColor(src,hsv,cv.COLOR_RGBA2RGB);
+  cv.cvtColor(hsv,hsv,cv.COLOR_RGB2HSV);
+
+  const hLow=+$('hLow').value, hHigh=+$('hHigh').value, sMin=+$('sMin').value, vMin=+$('vMin').value;
+  const low1 =new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[hLow,sMin,vMin,0]);
+  const high1=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[hHigh,255,255,255]);
+  const low2 =new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[170,sMin,vMin,0]);
+  const high2=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[179,255,255,255]);
+  cv.inRange(hsv,low1,high1,mask1); cv.inRange(hsv,low2,high2,mask2); cv.add(mask1,mask2,mask);
+  cv.morphologyEx(mask,mask,cv.MORPH_OPEN,kernel); cv.morphologyEx(mask,mask,cv.MORPH_CLOSE,kernel);
+
+  cv.findContours(mask,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+  let cx=null,cy=null,area=0;
+  for(let i=0;i<contours.size();i++){ const cnt=contours.get(i); const a=cv.contourArea(cnt);
+    if(a>area){ area=a; const m=cv.moments(cnt); if(m.m00){cx=Math.round(m.m10/m.m00); cy=Math.round(m.m01/m.m00);} } }
+
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  if(cx!==null){ ctx.beginPath(); ctx.arc(cx,cy,8,0,2*Math.PI); ctx.lineWidth=3; ctx.strokeStyle='#00ff00'; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx-15,cy); ctx.lineTo(cx+15,cy); ctx.moveTo(cx,cy-15); ctx.lineTo(cx,cy+15); ctx.stroke(); }
+
+  let vx=0,wz=0;
+  if(cx!==null){ const xErr=(cx-canvas.width/2)/(canvas.width/2);
+    const targetArea=(canvas.width*canvas.height)*0.05; const aErr=(targetArea-area)/targetArea;
+    wz=-0.8*xErr; vx=0.5*Math.max(-1,Math.min(1,aErr)); }
+  $('stats').textContent=`area:${Math.round(area)}  centroid:${cx===null?'n/a':cx+','+cy}  vx:${vx.toFixed(2)}  wz:${wz.toFixed(2)}  H:${hLow}-${hHigh}  S>=${sMin} V>=${vMin}`;
+
+  [low1,high1,low2,high2].forEach(m=>m.delete());
+  rafId=requestAnimationFrame(loop);
+}
+window.addEventListener('DOMContentLoaded',()=>{
+  video=document.getElementById('video');
+  canvas=document.getElementById('canvas'); ctx=canvas.getContext('2d');
+  document.getElementById('startBtn').addEventListener('click',start);
+  document.getElementById('stopBtn').addEventListener('click',stop);
+});
+</script>
+</body>
+</html>
