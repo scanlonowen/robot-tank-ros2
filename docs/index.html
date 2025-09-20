@@ -6,77 +6,106 @@
 <title>Robot Tank — Red Object Follower (Web Demo)</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 16px; text-align: center; }
-  #view { width: 640px; height: 480px; background:#111; border-radius:12px }
-  /* Keep the <video> rendered at 1x1 off-screen. 0x0 often yields black frames. */
-  #cam { position:absolute; left:-9999px; width:1px; height:1px; }
+  .wrap { display: inline-block; position: relative; }
+  #cam { width: 640px; height: 480px; background:#111; border-radius:12px; object-fit: cover; }
+  #overlay { position:absolute; left:0; top:0; width:640px; height:480px; pointer-events:none; }
   .kv { font-family: ui-monospace, monospace; margin: 12px 0; font-size: 1.1em; }
-  button { margin: 8px; padding: 6px 10px; }
+  button { margin: 6px; padding: 6px 10px; }
 </style>
 </head>
 <body>
-<h1>Robot Tank — Red Object Follower (Web Demo)</h1>
-<p>Allow camera access. Green dot = centroid; yellow line = image center.</p>
+<h1>Robot Tank — Red Object Follower</h1>
+<p>Click <b>Start</b>, allow the camera, then hold a red object. Green dot = centroid; yellow line = center.</p>
 
 <div>
+  <button id="startBtn">Start</button>
   <button id="frontBtn">Front cam</button>
   <button id="backBtn">Back cam</button>
 </div>
 
-<video id="cam" playsinline muted></video>
-<canvas id="view"></canvas>
+<div class="wrap">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="overlay"></canvas>
+</div>
+
 <div class="kv">vx: <span id="vx">0.00</span>, wz: <span id="wz">0.00</span></div>
 
-<script async src="https://docs.opencv.org/4.x/opencv.js"
-        onload="cv['onRuntimeInitialized']=onCvReady"></script>
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script>
+let cvReady = false;
+let streamFacing = 'user'; // 'user' (front) or 'environment' (back)
 let cap, src, bgr, hsv, mask1, mask2, mask, opened, closed, contours, hierarchy;
 const P = { target_frac: 0.020, tol_frac: 0.004, turn_gain: 1.2 };
 const $ = id => document.getElementById(id);
 let loopActive = false;
 
-async function startStream(facingMode='user') {
+window.cv = window.cv || {};
+window.cv.onRuntimeInitialized = () => { cvReady = true; };
+
+async function getStream(facingMode) {
+  const constraints = { video: { width: 640, height: 480, facingMode }, audio: false };
+  return navigator.mediaDevices.getUserMedia(constraints);
+}
+
+async function startCamera() {
   const cam = $('cam');
-  // stop old stream if any
+  // stop previous
   if (cam.srcObject) cam.srcObject.getTracks().forEach(t => t.stop());
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: 640, height: 480, facingMode }, audio: false
-  });
+  const stream = await getStream(streamFacing);
   cam.srcObject = stream;
+
+  // wait for real dimensions
   await new Promise(res => cam.onloadedmetadata = res);
   await cam.play();
+
+  // size overlay to video
+  const c = $('overlay');
+  c.width = cam.videoWidth || 640;
+  c.height = cam.videoHeight || 480;
+  c.style.width = cam.clientWidth + 'px';
+  c.style.height = cam.clientHeight + 'px';
+
   return cam;
 }
 
-function onCvReady(){ boot('user').catch(console.error); }
+async function ensureOpenCV() {
+  // wait until opencv.js finished loading
+  while (!cvReady) {
+    await new Promise(r => setTimeout(r, 50));
+  }
+}
 
-async function boot(facingMode){
-  const cam = await startStream(facingMode);
+async function boot() {
+  await ensureOpenCV();
+  const cam = await startCamera();
 
-  const canvas = $('view');
-  canvas.width  = cam.videoWidth  || 640;
-  canvas.height = cam.videoHeight || 480;
-  const ctx = canvas.getContext('2d');
-
-  // init (or re-init) mats
+  // init mats
+  const w = cam.videoWidth || 640, h = cam.videoHeight || 480;
+  const ctx = $('overlay').getContext('2d');
   cap  = new cv.VideoCapture(cam);
-  src  = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4);
-  bgr  = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC3);
-  hsv  = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC3);
+  src  = new cv.Mat(h, w, cv.CV_8UC4);
+  bgr  = new cv.Mat(h, w, cv.CV_8UC3);
+  hsv  = new cv.Mat(h, w, cv.CV_8UC3);
   mask1 = new cv.Mat(); mask2 = new cv.Mat(); mask = new cv.Mat();
   opened = new cv.Mat(); closed = new cv.Mat();
   contours = new cv.MatVector(); hierarchy = new cv.Mat();
 
-  // relaxed red thresholds (works in mixed lighting)
-  const low1  = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0,  80, 40, 0]);
-  const high1 = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [10, 255,255,0]);
-  const low2  = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [170, 80, 40, 0]);
-  const high2 = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [180,255,255,0]);
+  // relaxed red thresholds
+  const low1  = new cv.Mat(h, w, hsv.type(), [0,  80, 40, 0]);
+  const high1 = new cv.Mat(h, w, hsv.type(), [10, 255,255,0]);
+  const low2  = new cv.Mat(h, w, hsv.type(), [170, 80, 40, 0]);
+  const high2 = new cv.Mat(h, w, hsv.type(), [180,255,255,0]);
   const kernel = cv.Mat.ones(5,5,cv.CV_8U);
 
-  // frame loop driven by the camera
   loopActive = true;
+
   const onFrame = () => {
     if (!loopActive) return;
+
+    // clear overlay
+    ctx.clearRect(0, 0, w, h);
+
+    // read frame and process
     cap.read(src);
     cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
     cv.cvtColor(bgr, hsv, cv.COLOR_BGR2HSV);
@@ -88,8 +117,6 @@ async function boot(facingMode){
     cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
     let vx = 0, wz = 0;
-    ctx.drawImage(cam, 0, 0, canvas.width, canvas.height);
-
     if (contours.size() > 0){
       let idx = 0, maxA = 0;
       for (let i=0;i<contours.size();i++){
@@ -100,41 +127,42 @@ async function boot(facingMode){
       const m = cv.moments(c);
       if (m.m00 > 0){
         const cx = m.m10 / m.m00, cy = m.m01 / m.m00;
-        const cx0 = canvas.width / 2;
+        const cx0 = w / 2;
 
         let err = (cx - cx0) / cx0;
         if (Math.abs(err) < 0.05) err = 0.0;
         wz = Math.max(-1, Math.min(1, -P.turn_gain * err));
 
-        const imgA = canvas.width * canvas.height;
+        const imgA = w * h;
         const frac = maxA / imgA;
         const ef   = P.target_frac - frac;
         vx = Math.abs(ef) < P.tol_frac ? 0.0 : Math.max(-1, Math.min(1, ef / P.target_frac));
 
         // overlays
-        ctx.beginPath(); ctx.moveTo(cx0, 0); ctx.lineTo(cx0, canvas.height);
+        ctx.beginPath(); ctx.moveTo(cx0, 0); ctx.lineTo(cx0, h);
         ctx.lineWidth = 2; ctx.strokeStyle = '#ffff00'; ctx.stroke();
         ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 2*Math.PI); ctx.fillStyle = '#00ff00'; ctx.fill();
       }
     }
-
     $('vx').textContent = vx.toFixed(2);
     $('wz').textContent = wz.toFixed(2);
 
-    if ('requestVideoFrameCallback' in cam) {
-      cam.requestVideoFrameCallback(onFrame);
-    } else {
-      requestAnimationFrame(onFrame);
-    }
+    const vid = $('cam');
+    if ('requestVideoFrameCallback' in vid) vid.requestVideoFrameCallback(onFrame);
+    else requestAnimationFrame(onFrame);
   };
 
-  if ('requestVideoFrameCallback' in cam) cam.requestVideoFrameCallback(onFrame);
+  const vid = $('cam');
+  if ('requestVideoFrameCallback' in vid) vid.requestVideoFrameCallback(onFrame);
   else requestAnimationFrame(onFrame);
-
-  // camera switchers
-  $('frontBtn').onclick = async () => { loopActive = false; await boot('user'); };
-  $('backBtn').onclick  = async () => { loopActive = false; await boot('environment'); };
 }
+
+// Buttons / flow
+$('startBtn').onclick = async () => {
+  try { await boot(); } catch (e) { alert('Camera/OpenCV init failed. Check permissions.'); console.error(e); }
+};
+$('frontBtn').onclick = async () => { loopActive = false; streamFacing = 'user'; await boot(); };
+$('backBtn').onclick  = async () => { loopActive = false; streamFacing = 'environment'; await boot(); };
 </script>
 </body>
 </html>
