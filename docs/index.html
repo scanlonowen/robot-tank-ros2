@@ -3,78 +3,47 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Robot Tank — Red Tracker Demo (OpenCV.js)</title>
+<title>Robot Tank — Red Object Follower</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 16px; max-width: 1100px; }
-  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-  video, canvas { width: 360px; height: 270px; background:#111; border-radius:12px; }
-  .panel { min-width: 360px; }
-  .kv { font-family: ui-monospace,monospace; margin: 8px 0; }
-  input[type=range]{ width:220px; }
+  body { font-family: system-ui, sans-serif; margin: 16px; text-align: center; }
+  canvas { width: 640px; height: 480px; background: #111; border-radius: 12px; }
+  .kv { font-family: ui-monospace, monospace; margin: 12px 0; font-size: 1.2em; }
 </style>
 </head>
 <body>
-<h1>Robot Tank — Red Object Follower (Browser Demo)</h1>
-<p>This mirrors my ROS 2 node: HSV → mask → contour → centroid → control (<code>vx</code>, <code>wz</code>). It runs fully in your browser using OpenCV.js.</p>
+<h1>Robot Tank — Red Object Follower (Web Demo)</h1>
+<p>Allow camera access. Hold a red object and watch the overlay + <code>vx</code>, <code>wz</code> update.</p>
 
-<div class="row">
-  <div class="panel">
-    <video id="cam" autoplay playsinline></video><br/>
-    <canvas id="view"></canvas>
-    <canvas id="mask"></canvas>
-  </div>
-  <div class="panel">
-    <div class="kv">vx: <span id="vx">0.00</span>, wz: <span id="wz">0.00</span></div>
-    <div>target_frac <input id="target_frac" type="range" min="0.005" max="0.05" step="0.001" value="0.020">
-      <span id="tfv">0.020</span></div>
-    <div>tol_frac    <input id="tol_frac"    type="range" min="0.001" max="0.02" step="0.001" value="0.004">
-      <span id="tov">0.004</span></div>
-    <div>turn_gain   <input id="turn_gain"   type="range" min="0.2"   max="3.0"  step="0.1"   value="1.2">
-      <span id="tgv">1.2</span></div>
-
-    <p style="max-width:520px">
-      Webcam stays on-device. For the ROS 2 version, see this repo’s code: subscribes <code>/image_raw</code>, publishes <code>/mask</code> and <code>/cmd_vel</code>.
-    </p>
-    <p><em>Tip:</em> hold a bright red object close; adjust sliders if lighting is rough.</p>
-  </div>
-</div>
+<canvas id="view"></canvas>
+<div class="kv">vx: <span id="vx">0.00</span>, wz: <span id="wz">0.00</span></div>
 
 <!-- OpenCV.js -->
 <script async src="https://docs.opencv.org/4.x/opencv.js"
         onload="cv['onRuntimeInitialized']=onCvReady"></script>
 <script>
 let cap, src, bgr, hsv, mask1, mask2, mask, opened, closed, contours, hierarchy;
-const S = { target_frac:0.020, tol_frac:0.004, turn_gain:1.2 };
-const $ = id => document.getElementById(id);
-function bind(id, out, key, fmt=x=>x.toFixed(3)){
-  const el=$(id), outEl=$(out);
-  const upd=()=>{ S[key]=parseFloat(el.value); outEl.textContent=fmt(S[key]); };
-  el.addEventListener('input',upd); upd();
-}
+const S={target_frac:0.020, tol_frac:0.004, turn_gain:1.2};
+const $=id=>document.getElementById(id);
+
 async function setupCam(){
-  const cam=$('cam');
-  const stream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:false});
+  const cam=document.createElement('video');
+  cam.setAttribute("playsinline","true");
+  const stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:false});
   cam.srcObject=stream; await cam.play(); return cam;
 }
+
 function onCvReady(){ main().catch(console.error); }
 
 async function main(){
-  bind('target_frac','tfv','target_frac');
-  bind('tol_frac','tov','tol_frac');
-  bind('turn_gain','tgv','turn_gain',x=>x.toFixed(1));
-
   const cam=await setupCam();
-  const view=$('view'), maskC=$('mask');
-  view.width=cam.videoWidth; view.height=cam.videoHeight;
-  maskC.width=cam.videoWidth; maskC.height=cam.videoHeight;
-  const ctx=view.getContext('2d');
+  const canvas=$('view'); canvas.width=cam.videoWidth; canvas.height=cam.videoHeight;
+  const ctx=canvas.getContext('2d');
 
   cap=new cv.VideoCapture(cam);
   src=new cv.Mat(cam.videoHeight,cam.videoWidth,cv.CV_8UC4);
   bgr=new cv.Mat(cam.videoHeight,cam.videoWidth,cv.CV_8UC3);
   hsv=new cv.Mat(cam.videoHeight,cam.videoWidth,cv.CV_8UC3);
-  mask1=new cv.Mat(); mask2=new cv.Mat(); mask=new cv.Mat();
-  opened=new cv.Mat(); closed=new cv.Mat();
+  mask1=new cv.Mat(); mask2=new cv.Mat(); mask=new cv.Mat(); opened=new cv.Mat(); closed=new cv.Mat();
   contours=new cv.MatVector(); hierarchy=new cv.Mat();
   const low1=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[0,120,70,0]);
   const high1=new cv.Mat(hsv.rows,hsv.cols,hsv.type(),[10,255,255,0]);
@@ -94,39 +63,26 @@ async function main(){
     cv.findContours(closed,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
 
     let vx=0.0, wz=0.0;
-    ctx.drawImage(cam,0,0,view.width,view.height);
+    ctx.drawImage(cam,0,0,canvas.width,canvas.height);
 
-    if (contours.size()>0){
-      let maxIdx=0, maxArea=0;
-      for(let i=0;i<contours.size();i++){
-        const a=cv.contourArea(contours.get(i));
-        if(a>maxArea){maxArea=a; maxIdx=i;}
-      }
-      const c=contours.get(maxIdx);
-      const m=cv.moments(c);
+    if(contours.size()>0){
+      let idx=0,maxA=0;
+      for(let i=0;i<contours.size();i++){const a=cv.contourArea(contours.get(i));if(a>maxA){maxA=a;idx=i;}}
+      const c=contours.get(idx); const m=cv.moments(c);
       if(m.m00>0){
-        const cx=m.m10/m.m00, cy=m.m01/m.m00;
-        const center_x=view.width/2;
-
-        let err_x=(cx-center_x)/center_x;
-        if (Math.abs(err_x)<0.05) err_x=0.0;
-        wz=Math.max(-1,Math.min(1,-S.turn_gain*err_x));
-
-        const img_area=view.width*view.height;
-        const area_frac=maxArea/img_area;
-        const err_frac=S.target_frac - area_frac;
-        if(Math.abs(err_frac)<S.tol_frac){ vx=0.0; }
-        else { vx=Math.max(-1,Math.min(1,err_frac/S.target_frac)); }
-
-        // overlays
-        ctx.beginPath(); ctx.moveTo(center_x,0); ctx.lineTo(center_x,view.height);
+        const cx=m.m10/m.m00, cy=m.m01/m.m00, cx0=canvas.width/2;
+        let err=(cx-cx0)/cx0; if(Math.abs(err)<0.05) err=0.0;
+        wz=Math.max(-1,Math.min(1,-S.turn_gain*err));
+        const img=canvas.width*canvas.height, frac=maxA/img, ef=S.target_frac-frac;
+        vx=Math.abs(ef)<S.tol_frac?0.0:Math.max(-1,Math.min(1,ef/S.target_frac));
+        ctx.beginPath(); ctx.moveTo(cx0,0); ctx.lineTo(cx0,canvas.height);
         ctx.lineWidth=2; ctx.strokeStyle='#ffff00'; ctx.stroke();
-        ctx.beginPath(); ctx.arc(cx,cy,6,0,2*Math.PI); ctx.fillStyle='#00ff00'; ctx.fill();
+        ctx.beginPath(); ctx.arc(cx,cy,6,0,2*Math.PI);
+        ctx.fillStyle='#00ff00'; ctx.fill();
       }
     }
-    // mask view
-    const maskRGBA=new cv.Mat(); cv.cvtColor(closed,maskRGBA,cv.COLOR_GRAY2RGBA); cv.imshow('mask',maskRGBA); maskRGBA.delete();
-    $('vx').textContent=vx.toFixed(2); $('wz').textContent=wz.toFixed(2);
+    $('vx').textContent=vx.toFixed(2);
+    $('wz').textContent=wz.toFixed(2);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
@@ -134,4 +90,3 @@ async function main(){
 </script>
 </body>
 </html>
-
