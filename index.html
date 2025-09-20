@@ -1,2 +1,101 @@
-<!doctype html><meta charset="utf-8"><title>It works</title>
-<h1>GitHub Pages is live ✅</h1><p>Next: OpenCV.js.</p>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ROS2 Tank Robot — Owen Scanlon</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="styles.css">
+  <!-- highlight.js for pretty code blocks -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script>window.addEventListener('DOMContentLoaded',()=>hljs.highlightAll());</script>
+  <!-- OpenCV (WASM) -->
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()" onerror="onOpenCvError()"></script>
+</head>
+<body>
+  <nav class="container-fluid">
+    <ul><li><strong>ROS2 Tank Robot</strong></li></ul>
+    <ul>
+      <li><a href="#demo">Demo</a></li>
+      <li><a href="#arch">Architecture</a></li>
+      <li><a href="#code">Code</a></li>
+      <li><a href="#about">About</a></li>
+    </ul>
+  </nav>
+
+  <header class="hero">
+    <div class="container">
+      <h1>Tracked robot with ROS 2 + OpenCV</h1>
+      <p>Webcam red-object tracking in-browser, plus the on-robot ROS 2 stack (Pi 5 ↔ Pi Zero 2 ↔ Arduino).</p>
+      <a class="contrast" href="resume.pdf">Resume (PDF)</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="demo">
+      <h2>Live OpenCV.js Demo</h2>
+      <p>HSV mask → centroid → velocity hints (vx, wz). Runs fully in your browser.</p>
+      <div class="grid">
+        <article><video id="video" playsinline autoplay muted></video></article>
+        <article><canvas id="canvas"></canvas></article>
+      </div>
+      <div class="controls">
+        <button id="startBtn" disabled>Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <label>Resolution
+          <select id="resSelect"><option>640x480</option><option>1280x720</option></select>
+        </label>
+        <label>Hue <input type="number" id="hLow" value="0" min="0" max="179">–<input type="number" id="hHigh" value="10" min="0" max="179"></label>
+        <label>S/V min <input type="number" id="sMin" value="120" min="0" max="255"> / <input type="number" id="vMin" value="120" min="0" max="255"></label>
+      </div>
+      <pre id="stats">Loading OpenCV…</pre>
+    </section>
+
+    <section id="arch">
+      <h2>System Architecture</h2>
+      <div class="grid">
+        <article>
+          <img src="web/architecture.png" alt="System architecture">
+        </article>
+        <article>
+          <ul>
+            <li>Raspberry Pi 5 (Ubuntu 24.04, ROS 2 Jazzy): vision + control</li>
+            <li>Pi Zero 2: joystick → Twist messages</li>
+            <li>Arduino Mega + TB6600: steppers via AccelStepper</li>
+            <li>Ultrasonic sensors; roadmap: LiDAR + nav stack</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="code">
+      <h2>Code</h2>
+      <p>
+        <a href="src/">Browse /src</a>
+        <!-- OR link the separate repo -->
+        <!-- <a href="https://github.com/scanlonowen/robot-tank-ros2-code">robot-tank-ros2-code</a> -->
+      </p>
+
+      <!-- Example pretty snippet (copy one of your real files here) -->
+      <pre><code class="language-python">
+import cv2
+def find_red_centroid(frame_hsv):
+    lower1, upper1 = (0,120,120), (10,255,255)
+    lower2, upper2 = (170,120,120), (179,255,255)
+    mask = cv2.inRange(frame_hsv, lower1, upper1) | cv2.inRange(frame_hsv, lower2, upper2)
+    m = cv2.moments(mask)
+    return (int(m["m10"]/m["m00"]), int(m["m01"]/m["m00"])) if m["m00"] else None
+      </code></pre>
+    </section>
+
+    <section id="about">
+      <h2>About</h2>
+      <p>Built by Owen Scanlon — Computer Engineering @ UMN. <a href="mailto:...">Email</a> · <a href="https://www.linkedin.com/in/scanlonowen/">LinkedIn</a></p>
+    </section>
+  </main>
+
+  <footer class="container"><small>© Owen Scanlon</small></footer>
+  <script src="main.js"></script>
+</body>
+</html>
