@@ -1,151 +1,232 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Robot Tank — Red Object Follower (Web Demo)</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 16px; text-align: center; }
-  .wrap { display: inline-block; position: relative; }
-  #cam { width: 640px; height: 480px; background:#111; border-radius:12px; object-fit: cover; }
-  #overlay { position:absolute; left:0; top:0; width:640px; height:480px; pointer-events:none; }
-  .kv { font-family: ui-monospace, monospace; margin: 12px 0; font-size: 1.1em; }
-  button { margin: 8px; padding: 8px 14px; font-size: 1rem; }
-</style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Tank — Red Object Follower (Web Demo)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .mono {
+            font-family: 'Roboto Mono', monospace;
+        }
+    </style>
 </head>
-<body>
-<h1>Robot Tank — Red Object Follower</h1>
-<p>Click <b>Start</b>, allow the camera, then hold a red object. Green dot = centroid; yellow line = center.</p>
+<body class="bg-gray-900 text-gray-200 flex flex-col items-center justify-center min-h-screen p-4">
 
-<button id="startBtn">Start</button>
+    <div class="w-full max-w-3xl text-center">
+        <h1 class="text-3xl md:text-4xl font-bold text-white">Red Object Follower Demo</h1>
+        <p class="text-gray-400 mt-2">This is a web-based demo of a ROS2 computer vision node using OpenCV.js.</p>
+        <p class="text-gray-400 mt-1">Click <b>Start</b>, allow camera access, and show a red object to the camera.</p>
+        <p class="text-gray-500 text-sm mt-1">(Green dot = centroid; Yellow line = center line)</p>
+    </div>
 
-<div class="wrap" style="margin-top:12px;">
-  <video id="cam" playsinline muted></video>
-  <canvas id="overlay"></canvas>
-</div>
+    <div class="mt-6">
+        <button id="startBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-transform transform hover:scale-105 disabled:bg-gray-700 disabled:cursor-not-allowed disabled:scale-100">
+            Start
+        </button>
+    </div>
 
-<div class="kv">vx: <span id="vx">0.00</span>, wz: <span id="wz">0.00</span></div>
+    <!-- Status display to give user feedback during startup -->
+    <div id="status" class="mt-4 text-gray-400 h-6"></div>
 
-<!-- OpenCV.js -->
-<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
-<script>
-/* ----- tiny promise to wait for OpenCV ----- */
-const cvReady = new Promise(resolve => {
-  // if cv is already injected later, this will be called by the script
-  (window.cv ??= {});
-  cv.onRuntimeInitialized = resolve;
-});
+    <!-- Wrapper for video and canvas to ensure proper layering -->
+    <div class="relative w-full max-w-3xl aspect-video bg-black rounded-xl shadow-2xl overflow-hidden mt-4">
+        <video id="cam" class="w-full h-full object-cover" playsinline muted autoplay></video>
+        <canvas id="overlay" class="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
+    </div>
 
-const $ = id => document.getElementById(id);
-let loopActive = false;
+    <div class="mono bg-gray-800 text-gray-300 p-4 rounded-lg mt-6 text-lg shadow-inner">
+        vx: <span id="vx" class="font-bold text-green-400">0.00</span>, 
+        wz: <span id="wz" class="font-bold text-yellow-400">0.00</span>
+    </div>
 
-/* ----- start button handler ----- */
-$('startBtn').onclick = async () => {
-  try {
-    // 1) Ask for FRONT camera (user-facing). User gesture satisfies autoplay rules.
-    const cam = $('cam');
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' }, audio: false
-    });
-    cam.srcObject = stream;
-    await new Promise(res => cam.onloadedmetadata = res);
-    await cam.play();
+    <!-- Load OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+    <script>
+        // --- DOM Elements ---
+        const $ = id => document.getElementById(id);
+        const startBtn = $('startBtn');
+        const videoEl = $('cam');
+        const overlayEl = $('overlay');
+        const statusEl = $('status');
+        const vxEl = $('vx');
+        const wzEl = $('wz');
+        let loopActive = false;
 
-    // 2) Size overlay canvas to match actual video dims
-    const w = cam.videoWidth || 640, h = cam.videoHeight || 480;
-    const overlay = $('overlay');
-    overlay.width = w; overlay.height = h;
-    overlay.style.width = cam.clientWidth + 'px';
-    overlay.style.height = cam.clientHeight + 'px';
-    const ctx = overlay.getContext('2d');
+        // --- Promise to wait for OpenCV.js to load ---
+        const cvReady = new Promise(resolve => {
+            // Check if cv is already available
+            if (window.cv) {
+                resolve();
+            } else {
+                // If not, set a callback for when it's initialized
+                window.cv = window.cv || {};
+                cv.onRuntimeInitialized = resolve;
+            }
+        });
 
-    // 3) Wait for OpenCV to finish loading
-    await cvReady;
+        // --- Main application logic ---
+        startBtn.onclick = async () => {
+            startBtn.disabled = true;
+            loopActive = true;
 
-    // 4) Init OpenCV objects
-    const cap  = new cv.VideoCapture(cam);
-    const src  = new cv.Mat(h, w, cv.CV_8UC4);
-    const bgr  = new cv.Mat(h, w, cv.CV_8UC3);
-    const hsv  = new cv.Mat(h, w, cv.CV_8UC3);
-    const mask1 = new cv.Mat(), mask2 = new cv.Mat(), mask = new cv.Mat();
-    const opened = new cv.Mat(), closed = new cv.Mat();
-    const contours = new cv.MatVector(), hierarchy = new cv.Mat();
+            try {
+                // 1. Wait for OpenCV to be fully loaded
+                statusEl.textContent = 'Loading OpenCV.js...';
+                await cvReady;
+                statusEl.textContent = 'OpenCV loaded.';
 
-    // Red thresholds (relaxed for mixed lighting)
-    const low1  = new cv.Mat(h, w, hsv.type(), [  0,  80, 40, 0]);
-    const high1 = new cv.Mat(h, w, hsv.type(), [ 10, 255,255, 0]);
-    const low2  = new cv.Mat(h, w, hsv.type(), [170,  80, 40, 0]);
-    const high2 = new cv.Mat(h, w, hsv.type(), [180, 255,255, 0]);
-    const kernel = cv.Mat.ones(5,5,cv.CV_8U);
+                // 2. Request camera access
+                statusEl.textContent = 'Requesting camera access...';
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+                    audio: false
+                });
+                videoEl.srcObject = stream;
+                statusEl.textContent = 'Camera access granted.';
+                
+                // 3. Wait for the video to start playing
+                await new Promise(resolve => {
+                    videoEl.onloadedmetadata = () => resolve();
+                });
+                await videoEl.play();
 
-    const P = { target_frac: 0.020, tol_frac: 0.004, turn_gain: 1.2 };
-    loopActive = true;
+                // 4. Set up canvas dimensions to match the video feed
+                const w = videoEl.videoWidth;
+                const h = videoEl.videoHeight;
+                overlayEl.width = w;
+                overlayEl.height = h;
+                const ctx = overlayEl.getContext('2d', { willReadFrequently: true });
 
-    const onFrame = () => {
-      if (!loopActive) return;
+                // 5. Initialize OpenCV components
+                statusEl.textContent = 'Initializing computer vision components...';
+                const cap = new cv.VideoCapture(videoEl);
+                const src = new cv.Mat(h, w, cv.CV_8UC4);
+                const bgr = new cv.Mat(h, w, cv.CV_8UC3);
+                const hsv = new cv.Mat(h, w, cv.CV_8UC3);
+                const mask1 = new cv.Mat(), mask2 = new cv.Mat(), mask = new cv.Mat();
+                const opened = new cv.Mat(), closed = new cv.Mat();
+                const contours = new cv.MatVector(), hierarchy = new cv.Mat();
 
-      // clear overlay
-      ctx.clearRect(0, 0, w, h);
+                // HSV thresholds for detecting red color
+                const low1  = new cv.Mat(h, w, hsv.type(), [  0, 100, 100, 0]);
+                const high1 = new cv.Mat(h, w, hsv.type(), [ 10, 255, 255, 0]);
+                const low2  = new cv.Mat(h, w, hsv.type(), [170, 100, 100, 0]);
+                const high2 = new cv.Mat(h, w, hsv.type(), [180, 255, 255, 0]);
+                const kernel = cv.Mat.ones(5, 5, cv.CV_8U);
 
-      // read + process
-      cap.read(src);
-      cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
-      cv.cvtColor(bgr, hsv, cv.COLOR_BGR2HSV);
-      cv.inRange(hsv, low1, high1, mask1);
-      cv.inRange(hsv, low2, high2, mask2);
-      cv.bitwise_or(mask1, mask2, mask);
-      cv.morphologyEx(mask, opened, cv.MORPH_OPEN, kernel);
-      cv.morphologyEx(opened, closed, cv.MORPH_CLOSE, kernel);
-      cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                // Control parameters (matching your ROS node)
+                const P = { target_frac: 0.020, tol_frac: 0.004, turn_gain: 1.2 };
+                
+                statusEl.textContent = 'Running analysis...';
 
-      let vx = 0, wz = 0;
-      if (contours.size() > 0) {
-        // pick largest blob
-        let idx = 0, maxA = 0;
-        for (let i=0;i<contours.size();i++){
-          const a = cv.contourArea(contours.get(i));
-          if (a > maxA){ maxA = a; idx = i; }
-        }
-        const c = contours.get(idx);
-        const m = cv.moments(c);
-        if (m.m00 > 0) {
-          const cx = m.m10 / m.m00, cy = m.m01 / m.m00;
-          const cx0 = w / 2;
+                // --- Main Processing Loop ---
+                const onFrame = () => {
+                    if (!loopActive) {
+                        // Cleanup resources if the loop is stopped
+                        src.delete(); bgr.delete(); hsv.delete(); mask1.delete(); mask2.delete();
+                        mask.delete(); opened.delete(); closed.delete(); contours.delete();
+                        hierarchy.delete(); low1.delete(); high1.delete(); low2.delete();
+                        high2.delete(); kernel.delete();
+                        return;
+                    }
 
-          // control (matches your ROS node math)
-          let err = (cx - cx0) / cx0;
-          if (Math.abs(err) < 0.05) err = 0.0;
-          wz = Math.max(-1, Math.min(1, -P.turn_gain * err));
+                    // Clear previous drawings
+                    ctx.clearRect(0, 0, w, h);
 
-          const imgA = w * h, frac = maxA / imgA, ef = P.target_frac - frac;
-          vx = Math.abs(ef) < P.tol_frac ? 0.0 : Math.max(-1, Math.min(1, ef / P.target_frac));
+                    // Read a frame from the video
+                    cap.read(src);
 
-          // overlays
-          ctx.beginPath(); ctx.moveTo(cx0, 0); ctx.lineTo(cx0, h);
-          ctx.lineWidth = 2; ctx.strokeStyle = '#ffff00'; ctx.stroke();
-          ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 2*Math.PI); ctx.fillStyle = '#00ff00'; ctx.fill();
-        }
-      }
+                    // Convert frame from RGBA to HSV color space
+                    cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
+                    cv.cvtColor(bgr, hsv, cv.COLOR_BGR2HSV);
 
-      $('vx').textContent = vx.toFixed(2);
-      $('wz').textContent = wz.toFixed(2);
+                    // Create a mask for red pixels
+                    cv.inRange(hsv, low1, high1, mask1);
+                    cv.inRange(hsv, low2, high2, mask2);
+                    cv.bitwise_or(mask1, mask2, mask);
 
-      // drive loop from actual video frames if possible
-      if ('requestVideoFrameCallback' in cam) cam.requestVideoFrameCallback(onFrame);
-      else requestAnimationFrame(onFrame);
-    };
+                    // Clean up the mask using morphological operations
+                    cv.morphologyEx(mask, opened, cv.MORPH_OPEN, kernel);
+                    cv.morphologyEx(opened, closed, cv.MORPH_CLOSE, kernel);
 
-    if ('requestVideoFrameCallback' in cam) cam.requestVideoFrameCallback(onFrame);
-    else requestAnimationFrame(onFrame);
+                    // Find contours of the detected red areas
+                    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    // disable start button to avoid duplicate loops
-    $('startBtn').disabled = true;
+                    let vx = 0, wz = 0;
+                    if (contours.size() > 0) {
+                        // Find the largest contour
+                        let largestArea = 0;
+                        let largestContourIndex = -1;
+                        for (let i = 0; i < contours.size(); i++) {
+                            const area = cv.contourArea(contours.get(i));
+                            if (area > largestArea) {
+                                largestArea = area;
+                                largestContourIndex = i;
+                            }
+                        }
+                        
+                        const c = contours.get(largestContourIndex);
+                        const m = cv.moments(c);
 
-  } catch (err) {
-    console.error(err);
-    alert('Could not start camera or OpenCV. Check camera permissions and reload.');
-  }
-};
-</script>
+                        if (m.m00 > 0) {
+                            const cx = m.m10 / m.m00;
+                            const cy = m.m01 / m.m00;
+                            const cx0 = w / 2;
+
+                            // --- Control Logic ---
+                            let err = (cx - cx0) / cx0;
+                            if (Math.abs(err) < 0.05) err = 0.0;
+                            wz = Math.max(-1, Math.min(1, -P.turn_gain * err));
+
+                            const imgArea = w * h;
+                            const frac = largestArea / imgArea;
+                            const ef = P.target_frac - frac;
+                            vx = Math.abs(ef) < P.tol_frac ? 0.0 : Math.max(-1, Math.min(1, ef / P.target_frac));
+                            
+                            // --- Draw Overlays ---
+                            // Center line
+                            ctx.beginPath();
+                            ctx.moveTo(cx0, 0);
+                            ctx.lineTo(cx0, h);
+                            ctx.lineWidth = 3;
+                            ctx.strokeStyle = 'rgba(255, 255, 0, 0.7)';
+                            ctx.stroke();
+
+                            // Centroid dot
+                            ctx.beginPath();
+                            ctx.arc(cx, cy, 8, 0, 2 * Math.PI);
+                            ctx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+                            ctx.fill();
+                            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                            ctx.lineWidth = 2;
+                            ctx.stroke();
+                        }
+                    }
+
+                    // Update UI with calculated values
+                    vxEl.textContent = vx.toFixed(2);
+                    wzEl.textContent = wz.toFixed(2);
+
+                    // Schedule the next frame for processing
+                    requestAnimationFrame(onFrame);
+                };
+
+                // Start the loop
+                requestAnimationFrame(onFrame);
+
+            } catch (err) {
+                console.error("Error during startup:", err);
+                statusEl.textContent = `Error: ${err.message}. Check permissions and reload.`;
+                startBtn.disabled = false;
+            }
+        };
+    </script>
 </body>
 </html>
