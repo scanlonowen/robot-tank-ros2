@@ -83,275 +83,268 @@
   </div>
 
   <script>
-    // ---------- DOM ----------
-    const $ = id => document.getElementById(id);
-    const startBtn     = $('startBtn');
-    const stopBtn      = $('stopBtn');
-    const videoEl      = $('cam');
-    const overlayEl    = $('overlay');
-    const statusEl     = $('status');
-    const vxEl         = $('vx');
-    const wzEl         = $('wz');
-    const maskToggle   = $('maskToggle');
-    const hiddenCanvas = $('hiddenCanvas');
-    const colorPicker  = $('colorPicker');
+    document.addEventListener('DOMContentLoaded', () => {
+      // ---------- DOM ----------
+      const $ = id => document.getElementById(id);
+      const startBtn     = $('startBtn');
+      const stopBtn      = $('stopBtn');
+      const videoEl      = $('cam');
+      const overlayEl    = $('overlay');
+      const statusEl     = $('status');
+      const vxEl         = $('vx');
+      const wzEl         = $('wz');
+      const maskToggle   = $('maskToggle');
+      const hiddenCanvas = $('hiddenCanvas');
+      const colorPicker  = $('colorPicker');
 
-    // ---------- State ----------
-    let loopActive = false;
-    let stream = null;
-    let cvObjects = {};
-    let trackingParams = {};
-    let isCvInitialized = false;
+      // ---------- State ----------
+      let loopActive = false;
+      let stream = null;
+      let cvObjects = {};
+      let trackingParams = {};
+      let isCvInitialized = false;
 
-    // Ensure iOS behaves
-    videoEl.setAttribute('playsinline','');
-    videoEl.muted = true;
+      // iOS quirks
+      videoEl.setAttribute('playsinline','');
+      videoEl.muted = true;
 
-    // ---------- OpenCV Load ----------
-    let cv = null;
-    const cvReady = new Promise((resolve, reject) => {
-      // Must exist before the script loads
-      window.Module = {
-        onRuntimeInitialized: () => {
-          cv = window.cv;
-          console.log('OpenCV runtime initialized.');
-          resolve(cv);
-        },
-        printErr: (err) => {
-          console.error('OpenCV Module Error:', err);
-        }
-      };
-      // Optional: timeout guard
-      setTimeout(() => reject(new Error('OpenCV load timeout')), 30000);
-    });
-
-    // ---------- Color helpers ----------
-    function hexToRgb(hex) {
-      const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-      return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : null;
-    }
-    function rgbToHsv(r,g,b) {
-      r/=255; g/=255; b/=255;
-      const max=Math.max(r,g,b), min=Math.min(r,g,b);
-      const d=max-min;
-      let h=0, s=max===0?0:d/max, v=max;
-      if (d !== 0) {
-        switch (max) {
-          case r: h=(g-b)/d + (g<b?6:0); break;
-          case g: h=(b-r)/d + 2; break;
-          default: h=(r-g)/d + 4; break;
-        }
-        h/=6;
-      }
-      return { h: Math.round(h*179), s: Math.round(s*255), v: Math.round(v*255) }; // OpenCV ranges
-    }
-
-    function setColorThresholds(hexColor) {
-      const rgb = hexToRgb(hexColor);
-      if (!rgb) return;
-      const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
-      const hueTol = 12, minS=70, minV=70;
-      let hmin = hsv.h - hueTol, hmax = hsv.h + hueTol;
-
-      if (hmin < 0) {
-        trackingParams.low1  = [0,   minS, minV, 0];
-        trackingParams.high1 = [hmax,255,  255,  255];
-        trackingParams.low2  = [180+hmin, minS, minV, 0];
-        trackingParams.high2 = [179, 255,  255,  255];
-      } else if (hmax > 179) {
-        trackingParams.low1  = [hmin, minS, minV, 0];
-        trackingParams.high1 = [179,  255,  255,  255];
-        trackingParams.low2  = [0,    minS, minV, 0];
-        trackingParams.high2 = [hmax-180,255,255,255];
-      } else {
-        trackingParams.low1  = [hmin, minS, minV, 0];
-        trackingParams.high1 = [hmax, 255,  255,  255];
-        // disable range 2
-        trackingParams.low2  = [0,0,0,0];
-        trackingParams.high2 = [0,0,0,0];
-      }
-    }
-
-    // ---------- Cleanup ----------
-    function safeDelete(x) { try { x && typeof x.delete === 'function' && x.delete(); } catch(_){} }
-    function cleanupCvObjects() {
-      Object.values(cvObjects).forEach(safeDelete);
-      cvObjects = {};
-      trackingParams = {};
-    }
-
-    stopBtn.onclick = () => {
-      loopActive = false;
-      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-      videoEl.srcObject = null;
-      cleanupCvObjects();
-      isCvInitialized = false;
-      statusEl.textContent = 'Camera stopped.';
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-      const ctx = overlayEl.getContext('2d');
-      ctx && ctx.clearRect(0,0,overlayEl.width||0, overlayEl.height||0);
-      vxEl.textContent = '0.00';
-      wzEl.textContent = '0.00';
-    };
-
-    colorPicker.oninput = () => {
-      if (isCvInitialized) setColorThresholds(colorPicker.value);
-    };
-
-    startBtn.onclick = async () => {
-      startBtn.disabled = true;
-      stopBtn.disabled = true;
-      loopActive = true;
-      isCvInitialized = false;
-
-      try {
-        // 1) Load OpenCV
-        statusEl.innerHTML = `
-          <div class="flex items-center">
-            <div class="spinner"></div>
-            <span class="ml-2 font-medium">Loading vision library…</span>
-          </div>`;
-        await cvReady;
-        statusEl.textContent = 'Vision library loaded.';
-
-        // 2) Camera
-        statusEl.textContent = 'Requesting camera access…';
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width:{ideal:640}, height:{ideal:480}, facingMode:'user' },
-          audio: false
-        });
-        videoEl.srcObject = stream;
-
-        // Wait for metadata then play
-        await new Promise(res => { videoEl.onloadedmetadata = res; });
-        await videoEl.play();
-        stopBtn.disabled = false;
-        statusEl.textContent = 'Starting analysis…';
-
-        // 3) Main loop
-        const hiddenCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-
-        const onFrame = () => {
-          if (!loopActive) return;
-
-          let contours = new cv.MatVector();
-          let hierarchy = new cv.Mat();
-
-          try {
-            const w = videoEl.videoWidth, h = videoEl.videoHeight;
-            if (!w || !h) { requestAnimationFrame(onFrame); return; }
-
-            if (!isCvInitialized) {
-              overlayEl.width = w; overlayEl.height = h;
-              hiddenCanvas.width = w; hiddenCanvas.height = h;
-
-              cvObjects.bgr     = new cv.Mat(h, w, cv.CV_8UC3);
-              cvObjects.hsv     = new cv.Mat(h, w, cv.CV_8UC3);
-              cvObjects.mask1   = new cv.Mat();
-              cvObjects.mask2   = new cv.Mat();
-              cvObjects.mask    = new cv.Mat();
-              cvObjects.opened  = new cv.Mat();
-              cvObjects.closed  = new cv.Mat();
-              cvObjects.kernel  = cv.Mat.ones(5, 5, cv.CV_8U);
-
-              setColorThresholds(colorPicker.value);
-              isCvInitialized = true;
-              statusEl.textContent = 'Running analysis…';
-            }
-
-            // Read frame
-            hiddenCtx.drawImage(videoEl, 0, 0, w, h);
-            let rgba = cv.imread(hiddenCanvas);                 // CV_8UC4
-            cv.cvtColor(rgba, cvObjects.bgr, cv.COLOR_RGBA2BGR);
-            safeDelete(rgba);
-
-            // HSV + threshold
-            cv.cvtColor(cvObjects.bgr, cvObjects.hsv, cv.COLOR_BGR2HSV);
-            const low1  = new cv.Scalar(...trackingParams.low1);
-            const high1 = new cv.Scalar(...trackingParams.high1);
-            const low2  = new cv.Scalar(...trackingParams.low2);
-            const high2 = new cv.Scalar(...trackingParams.high2);
-
-            cv.inRange(cvObjects.hsv, low1, high1, cvObjects.mask1);
-            cv.inRange(cvObjects.hsv, low2, high2, cvObjects.mask2);
-            safeDelete(low1); safeDelete(high1); safeDelete(low2); safeDelete(high2);
-
-            cv.bitwise_or(cvObjects.mask1, cvObjects.mask2, cvObjects.mask);
-            cv.morphologyEx(cvObjects.mask,   cvObjects.opened, cv.MORPH_OPEN,  cvObjects.kernel);
-            cv.morphologyEx(cvObjects.opened, cvObjects.closed, cv.MORPH_CLOSE, cvObjects.kernel);
-
-            let vx = 0, wz = 0;
-            const ctx = overlayEl.getContext('2d');
-            ctx.clearRect(0, 0, w, h);
-
-            if (maskToggle.checked) {
-              // Show mask directly to the overlay canvas
-              cv.imshow('overlay', cvObjects.closed);
-            } else {
-              cv.findContours(cvObjects.closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-              if (contours.size() > 0) {
-                let largestArea = 0, idx = -1;
-                for (let i = 0; i < contours.size(); i++) {
-                  const a = cv.contourArea(contours.get(i));
-                  if (a > largestArea) { largestArea = a; idx = i; }
-                }
-                if (idx !== -1) {
-                  const c = contours.get(idx);
-                  const m = cv.moments(c);
-                  if (m.m00 > 0) {
-                    const cx = m.m10 / m.m00;
-                    const cy = m.m01 / m.m00;
-
-                    // Heading error -> angular speed
-                    let err = (cx - (w/2)) / (w/2);
-                    if (Math.abs(err) < 0.05) err = 0.0;
-                    wz = Math.max(-1, Math.min(1, -1.2 * err));
-
-                    // Area -> linear speed (target ~2% of frame)
-                    const frac = largestArea / (w * h);
-                    const ef = 0.020 - frac;
-                    vx = Math.abs(ef) < 0.004 ? 0.0 : Math.max(-1, Math.min(1, ef / 0.020));
-
-                    // Draw target center
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 8, 0, 2*Math.PI);
-                    ctx.fillStyle = 'rgba(0, 255, 0, 0.85)';
-                    ctx.fill();
-                    ctx.lineWidth = 2;
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-                    ctx.stroke();
-                  }
-                  // c is owned by the vector; no delete needed here
-                }
-              }
-            }
-
-            vxEl.textContent = vx.toFixed(2);
-            wzEl.textContent = wz.toFixed(2);
-          } catch (err) {
-            console.error('Error in onFrame:', err);
-            if (loopActive) stopBtn.onclick();
-          } finally {
-            safeDelete(contours);
-            safeDelete(hierarchy);
-          }
-
-          requestAnimationFrame(onFrame);
+      // ---------- OpenCV Load ----------
+      let cv = null;
+      const cvReady = new Promise((resolve, reject) => {
+        window.Module = {
+          onRuntimeInitialized: () => {
+            cv = window.cv;
+            resolve(cv);
+          },
+          printErr: (err) => console.error('OpenCV Module Error:', err)
         };
+        // Timeout guard
+        setTimeout(() => reject(new Error('OpenCV load timeout')), 30000);
+      });
 
-        requestAnimationFrame(onFrame);
-      } catch (err) {
-        console.error('Error during startup:', err);
-        statusEl.textContent = 'Error: ' + err.message;
+      // ---------- Color helpers ----------
+      function hexToRgb(hex) {
+        const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : null;
+      }
+      function rgbToHsv(r,g,b) {
+        r/=255; g/=255; b/=255;
+        const max=Math.max(r,g,b), min=Math.min(r,g,b);
+        const d=max-min;
+        let h=0, s=max===0?0:d/max, v=max;
+        if (d !== 0) {
+          switch (max) {
+            case r: h=(g-b)/d + (g<b?6:0); break;
+            case g: h=(b-r)/d + 2; break;
+            default: h=(r-g)/d + 4; break;
+          }
+          h/=6;
+        }
+        return { h: Math.round(h*179), s: Math.round(s*255), v: Math.round(v*255) }; // OpenCV ranges
+      }
+      function setColorThresholds(hexColor) {
+        const rgb = hexToRgb(hexColor);
+        if (!rgb) return;
+        const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+        const hueTol = 12, minS=70, minV=70;
+        let hmin = hsv.h - hueTol, hmax = hsv.h + hueTol;
+
+        if (hmin < 0) {
+          trackingParams.low1  = [0,   minS, minV, 0];
+          trackingParams.high1 = [hmax,255,  255,  255];
+          trackingParams.low2  = [180+hmin, minS, minV, 0];
+          trackingParams.high2 = [179, 255,  255,  255];
+        } else if (hmax > 179) {
+          trackingParams.low1  = [hmin, minS, minV, 0];
+          trackingParams.high1 = [179,  255,  255,  255];
+          trackingParams.low2  = [0,    minS, minV, 0];
+          trackingParams.high2 = [hmax-180,255,255,255];
+        } else {
+          trackingParams.low1  = [hmin, minS, minV, 0];
+          trackingParams.high1 = [hmax, 255,  255,  255];
+          trackingParams.low2  = [0,0,0,0];
+          trackingParams.high2 = [0,0,0,0];
+        }
+      }
+
+      // ---------- Cleanup ----------
+      const safeDelete = x => { try { x && typeof x.delete === 'function' && x.delete(); } catch(_){} };
+      function cleanupCvObjects() {
+        Object.values(cvObjects).forEach(safeDelete);
+        cvObjects = {};
+        trackingParams = {};
+      }
+
+      stopBtn.addEventListener('click', () => {
+        loopActive = false;
+        if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+        videoEl.srcObject = null;
+        cleanupCvObjects();
+        isCvInitialized = false;
+        statusEl.textContent = 'Camera stopped.';
         startBtn.disabled = false;
         stopBtn.disabled = true;
-      }
-    };
+        const ctx = overlayEl.getContext('2d');
+        ctx && ctx.clearRect(0,0,overlayEl.width||0, overlayEl.height||0);
+        vxEl.textContent = '0.00';
+        wzEl.textContent = '0.00';
+      });
+
+      colorPicker.addEventListener('input', () => {
+        if (isCvInitialized) setColorThresholds(colorPicker.value);
+      });
+
+      startBtn.addEventListener('click', async () => {
+        startBtn.disabled = true;
+        stopBtn.disabled = true;
+        loopActive = true;
+        isCvInitialized = false;
+
+        try {
+          // 1) Load OpenCV
+          statusEl.innerHTML = `
+            <div class="flex items-center">
+              <div class="spinner"></div>
+              <span class="ml-2 font-medium">Loading vision library…</span>
+            </div>`;
+          await cvReady;
+          statusEl.textContent = 'Vision library loaded.';
+
+          // 2) Camera
+          statusEl.textContent = 'Requesting camera access…';
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { width:{ideal:640}, height:{ideal:480}, facingMode:'user' },
+            audio: false
+          });
+          videoEl.srcObject = stream;
+
+          await new Promise(res => { videoEl.onloadedmetadata = res; });
+          await videoEl.play();
+          stopBtn.disabled = false;
+          statusEl.textContent = 'Starting analysis…';
+
+          // 3) Main loop
+          const hiddenCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
+
+          const onFrame = () => {
+            if (!loopActive) return;
+
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+
+            try {
+              const w = videoEl.videoWidth, h = videoEl.videoHeight;
+              if (!w || !h) { requestAnimationFrame(onFrame); return; }
+
+              if (!isCvInitialized) {
+                overlayEl.width = w; overlayEl.height = h;
+                hiddenCanvas.width = w; hiddenCanvas.height = h;
+
+                cvObjects.bgr     = new cv.Mat(h, w, cv.CV_8UC3);
+                cvObjects.hsv     = new cv.Mat(h, w, cv.CV_8UC3);
+                cvObjects.mask1   = new cv.Mat();
+                cvObjects.mask2   = new cv.Mat();
+                cvObjects.mask    = new cv.Mat();
+                cvObjects.opened  = new cv.Mat();
+                cvObjects.closed  = new cv.Mat();
+                cvObjects.kernel  = cv.Mat.ones(5, 5, cv.CV_8U);
+
+                setColorThresholds(colorPicker.value);
+                isCvInitialized = true;
+                statusEl.textContent = 'Running analysis…';
+              }
+
+              // Read frame
+              hiddenCtx.drawImage(videoEl, 0, 0, w, h);
+              let rgba = cv.imread(hiddenCanvas);                 // CV_8UC4
+              cv.cvtColor(rgba, cvObjects.bgr, cv.COLOR_RGBA2BGR);
+              safeDelete(rgba);
+
+              // HSV + threshold
+              cv.cvtColor(cvObjects.bgr, cvObjects.hsv, cv.COLOR_BGR2HSV);
+              const low1  = new cv.Scalar(...trackingParams.low1);
+              const high1 = new cv.Scalar(...trackingParams.high1);
+              const low2  = new cv.Scalar(...trackingParams.low2);
+              const high2 = new cv.Scalar(...trackingParams.high2);
+
+              cv.inRange(cvObjects.hsv, low1, high1, cvObjects.mask1);
+              cv.inRange(cvObjects.hsv, low2, high2, cvObjects.mask2);
+              safeDelete(low1); safeDelete(high1); safeDelete(low2); safeDelete(high2);
+
+              cv.bitwise_or(cvObjects.mask1, cvObjects.mask2, cvObjects.mask);
+              cv.morphologyEx(cvObjects.mask,   cvObjects.opened, cv.MORPH_OPEN,  cvObjects.kernel);
+              cv.morphologyEx(cvObjects.opened, cvObjects.closed, cv.MORPH_CLOSE, cvObjects.kernel);
+
+              let vx = 0, wz = 0;
+              const ctx = overlayEl.getContext('2d');
+              ctx.clearRect(0, 0, w, h);
+
+              if (maskToggle.checked) {
+                cv.imshow('overlay', cvObjects.closed);
+              } else {
+                cv.findContours(cvObjects.closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                if (contours.size() > 0) {
+                  let largestArea = 0, idx = -1;
+                  for (let i = 0; i < contours.size(); i++) {
+                    const a = cv.contourArea(contours.get(i));
+                    if (a > largestArea) { largestArea = a; idx = i; }
+                  }
+                  if (idx !== -1) {
+                    const c = contours.get(idx);
+                    const m = cv.moments(c);
+                    if (m.m00 > 0) {
+                      const cx = m.m10 / m.m00;
+                      const cy = m.m01 / m.m00;
+
+                      // Heading error -> angular speed
+                      let err = (cx - (w/2)) / (w/2);
+                      if (Math.abs(err) < 0.05) err = 0.0;
+                      wz = Math.max(-1, Math.min(1, -1.2 * err));
+
+                      // Area -> linear speed (target ~2% of frame)
+                      const frac = largestArea / (w * h);
+                      const ef = 0.020 - frac;
+                      vx = Math.abs(ef) < 0.004 ? 0.0 : Math.max(-1, Math.min(1, ef / 0.020));
+
+                      // Draw target center
+                      ctx.beginPath();
+                      ctx.arc(cx, cy, 8, 0, 2*Math.PI);
+                      ctx.fillStyle = 'rgba(0, 255, 0, 0.85)';
+                      ctx.fill();
+                      ctx.lineWidth = 2;
+                      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                      ctx.stroke();
+                    }
+                  }
+                }
+              }
+
+              vxEl.textContent = vx.toFixed(2);
+              wzEl.textContent = wz.toFixed(2);
+            } catch (err) {
+              console.error('Error in onFrame:', err);
+              if (loopActive) stopBtn.click();
+            } finally {
+              safeDelete(contours);
+              safeDelete(hierarchy);
+            }
+
+            requestAnimationFrame(onFrame);
+          };
+
+          requestAnimationFrame(onFrame);
+        } catch (err) {
+          console.error('Error during startup:', err);
+          statusEl.textContent = 'Error: ' + err.message;
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+        }
+      });
+    });
   </script>
 
-  <!-- Load OpenCV AFTER we define window.Module -->
+  <!-- Load OpenCV AFTER window.Module is defined -->
   <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 </body>
 </html>
