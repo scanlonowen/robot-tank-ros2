@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-// ---- DRIVER PINS ----
+// Driver Pins
 #define EN_PIN1   7
 #define DIR_PIN1  6
 #define STEP_PIN1 5
@@ -12,14 +12,14 @@
 #define DIR_PIN2  9
 #define STEP_PIN2 8
 
-// --- serial ingest state ---
+
 static char   rx_buf[64];
 static uint8_t rx_idx = 0;
 
 static unsigned long last_cmd_ms = 0;
 static bool   cmd_present = false;
 
-// caps (tune to your robot)
+
 const float V_MAX = 8.0f;   // inches/s
 const float W_MAX = 3.0f;   // rad/s
 
@@ -38,14 +38,14 @@ float steps_per_inch = steps_per_wheel_rev / c_wheel;
 float v = 0.0f;    // inches/s
 float w = 0.0f;    // rad/s
 
-// slew state
+
 float prev_left_sps  = 0.0f;
 float prev_right_sps = 0.0f;
 
 AccelStepper stepper_left (AccelStepper::DRIVER, STEP_PIN1, DIR_PIN1);
 AccelStepper stepper_right(AccelStepper::DRIVER, STEP_PIN2, DIR_PIN2);
 
-// ---- fwd decls ----
+
 void stepperSetup();
 void driveMotors(float Val, float Ang);
 bool parseVWLine(const char* s, float* outV, float* outW);
@@ -58,7 +58,7 @@ void setup() {
 void loop() {
   const unsigned long now = millis();
 
-  // Non-blocking line reader. Expect "V:<num>;W:<num>\n"
+  // Non-blocking line reader: "V:<num>;W:<num>\n"
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
@@ -66,7 +66,7 @@ void loop() {
       rx_buf[min(rx_idx, (uint8_t)(sizeof(rx_buf)-1))] = '\0';
       float nv, nw;
       if (parseVWLine(rx_buf, &nv, &nw)) {
-        // clamp to sane limits
+        // limit speed
         if (nv >  V_MAX) nv =  V_MAX; if (nv < -V_MAX) nv = -V_MAX;
         if (nw >  W_MAX) nw =  W_MAX; if (nw < -W_MAX) nw = -W_MAX;
         v = nv; w = nw;
@@ -77,12 +77,12 @@ void loop() {
     } else if (rx_idx < sizeof(rx_buf)-1) {
       rx_buf[rx_idx++] = c;
     } else {
-      // overflow: drop buffer and resync on next newline
+      
       rx_idx = 0;
     }
   }
 
-  // watchdog: if we stop hearing commands, stop
+  
   float v_cmd = v;
   float w_cmd = w;
   if (!cmd_present || (now - last_cmd_ms) > 300) {
@@ -92,7 +92,7 @@ void loop() {
 
   driveMotors(v_cmd, w_cmd);
 
-  // Debug print @4 Hz
+  // Debug 
   static unsigned long lastPrint = 0;
   if (now - lastPrint >= 250) {
     float left_sps  = (v_cmd + w_cmd * (track_width * 0.5f)) * steps_per_inch;
@@ -115,7 +115,7 @@ void driveMotors(float Val, float Ang) {
   float target_left  = (Val + Ang * (track_width * 0.5f)) * steps_per_inch;
   float target_right = (Val - Ang * (track_width * 0.5f)) * steps_per_inch;
 
-  // Give turns some bite (optional)
+  
   const float MIN_TURN_SPS = 120.0f;
   if (fabs(Ang) > 0.25f) {
     if (fabs(target_left)  > 0 && fabs(target_left)  < MIN_TURN_SPS)
@@ -124,8 +124,8 @@ void driveMotors(float Val, float Ang) {
       target_right = (target_right > 0 ?  MIN_TURN_SPS : -MIN_TURN_SPS);
   }
 
-  // *** Hard cap that preserves the commanded v/w mix ***
-  const float MAX_SPS = 8000.0f;            // pick what your rig can do
+  //Max speed
+  const float MAX_SPS = 8000.0f;           
   float maxmag = max(fabs(target_left), fabs(target_right));
   if (maxmag > MAX_SPS) {
     float scale = MAX_SPS / maxmag;
@@ -156,18 +156,18 @@ void stepperSetup() {
   stepper_left.setEnablePin(EN_PIN1);
   stepper_right.setEnablePin(EN_PIN2);
 
-  // Invert enable if your driver is active-low on EN
+  //
   stepper_left.setPinsInverted(true, false, true);
   stepper_right.setPinsInverted(false, false, true);
 
   stepper_left.enableOutputs();
   stepper_right.enableOutputs();
 
-  // TB6560 likes >= 2-5us; 10us is safe
+  
   stepper_left.setMinPulseWidth(10);
   stepper_right.setMinPulseWidth(10);
 
-  // runSpeed() ignores acceleration; keep for future run() use
+  
   stepper_left.setMaxSpeed(7000);
   stepper_right.setMaxSpeed(7000);
   stepper_left.setAcceleration(400);
