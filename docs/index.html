@@ -1,479 +1,349 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Robot Tank — Color Object Follower (Web Demo)</title>
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto+Mono&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    body { font-family: 'Inter', sans-serif; background-color: #111827; }
-    .mono { font-family: 'Roboto Mono', monospace; }
-    .switch { position: relative; display: inline-block; width: 60px; height: 34px; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider { position: absolute; cursor: pointer; inset: 0; background:#4b5563; transition:.4s; border-radius:34px;}
-    .slider:before { content:""; position:absolute; height:26px; width:26px; left:4px; bottom:4px; background:#fff; transition:.4s; border-radius:50%; }
-    input:checked + .slider { background:#4f46e5; }
-    input:checked + .slider:before { transform: translateX(26px); }
-    input[type="color"] { appearance:none; width:48px; height:32px; border:none; border-radius:8px; cursor:pointer; background:transparent; }
-    input[type="color"]::-webkit-color-swatch { border-radius:8px; border:2px solid #6b7280; }
-    input[type="color"]::-moz-color-swatch { border-radius:8px; border:2px solid #6b7280; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner { display:inline-block; width:1.25rem; height:1.25rem; border-radius:50%; border:3px solid rgba(255,255,255,0.3); border-top-color:#fff; animation:spin 1s linear infinite; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Color Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom styles for better aesthetics */
+        button {
+            transition: all 0.2s ease-in-out;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        .data-card {
+            background-color: rgba(31, 41, 55, 0.8); /* bg-gray-800 with opacity */
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            padding-top: 75%; /* 4:3 Aspect Ratio */
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 0.5rem;
+            background-color: #111827; /* bg-gray-900 */
+        }
+        .status-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #9ca3af; /* text-gray-400 */
+        }
+    </style>
 </head>
-<body class="bg-gray-900 text-gray-200 grid place-items-center min-h-screen p-4">
+<body class="bg-gray-900 text-gray-200 antialiased">
+    <div class="min-h-screen flex flex-col items-center justify-center p-4">
+        <main class="w-full max-w-6xl mx-auto">
+            <header class="text-center mb-6">
+                <h1 class="text-4xl font-bold text-white">Webcam Color Tracker</h1>
+                <p class="text-gray-400 mt-2">An in-browser implementation of the ROS image processing node.</p>
+            </header>
 
-  <main class="flex flex-col items-center w-full max-w-full">
-    <div class="w-full max-w-3xl text-center">
-      <h1 class="text-3xl md:text-4xl font-bold text-white">Color Object Follower Demo</h1>
-      <p class="text-gray-400 mt-2">A web-based demo of a computer vision node using OpenCV.js.</p>
-      <p class="text-gray-400 mt-1">Click <b>Start</b>, allow camera access, and show an object of the selected color.</p>
-      <p class="text-gray-500 text-sm mt-1">(A green dot marks the center of the detected object)</p>
-    </div>
-    <div class="relative z-20 mt-6 flex items-center space-x-4">
-      <button id="startBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-transform transform hover:scale-105 disabled:bg-gray-700 disabled:cursor-not-allowed disabled:scale-100">
-        Start
-      </button>
-      <button id="stopBtn" class="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-transform transform hover:scale-105 disabled:bg-gray-700 disabled:cursor-not-allowed disabled:scale-100" disabled>
-        Stop
-      </button>
-    </div>
-    <!-- Status -->
-    <div id="status" class="mt-4 text-gray-400 h-12 flex items-center justify-center"></div>
-    <!-- Video + overlay -->
-    <div class="relative z-10 w-full max-w-3xl aspect-video bg-black rounded-xl shadow-2xl overflow-hidden mt-4">
-      <video id="cam" class="w-full h-full object-cover" playsinline muted autoplay></video>
-      <canvas id="overlay" class="absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
-    </div>
-    <!-- Controls -->
-    <div class="relative z-20 flex items-center space-x-6 mt-4">
-      <div class="flex items-center space-x-3">
-        <label for="maskToggle" class="text-gray-300">Show Mask:</label>
-        <label class="switch">
-          <input type="checkbox" id="maskToggle">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="flex items-center space-x-3">
-        <label for="colorPicker" class="text-gray-300">Track Color:</label>
-        <input type="color" id="colorPicker" value="#FF0000">
-      </div>
-    </div>
-    <div class="mono bg-gray-800 text-gray-300 p-4 rounded-lg mt-6 text-lg shadow-inner">
-      vx: <span id="vx" class="font-bold text-green-400">0.00</span>,
-      wz: <span id="wz" class="font-bold text-yellow-400">0.00</span>
-    </div>
-    <canvas id="hiddenCanvas" style="display:none;"></canvas>
-  </main>
+            <!-- Controls -->
+            <div class="flex justify-center items-center space-x-4 mb-6">
+                <button id="startButton" class="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75">
+                    Start Webcam
+                </button>
+                <button id="stopButton" class="px-6 py-3 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-75" disabled>
+                    Stop Webcam
+                </button>
+            </div>
 
-  <!-- Load OpenCV.js -->
-  <script>
-    let cvReady = false;
-    let domReady = false;
+            <!-- Video and Mask Canvases -->
+            <div class="grid md:grid-cols-2 gap-6 mb-6">
+                <div class="flex flex-col items-center">
+                    <h2 class="text-xl font-semibold mb-3 text-white">Live Feed with Overlay</h2>
+                    <div id="outputContainer" class="canvas-container shadow-lg">
+                         <div id="outputStatus" class="status-text">Webcam is off</div>
+                        <canvas id="outputCanvas"></canvas>
+                    </div>
+                </div>
+                <div class="flex flex-col items-center">
+                    <h2 class="text-xl font-semibold mb-3 text-white">Processed Color Mask</h2>
+                    <div id="maskContainer" class="canvas-container shadow-lg">
+                        <div id="maskStatus" class="status-text">Webcam is off</div>
+                        <canvas id="maskCanvas"></canvas>
+                    </div>
+                </div>
+            </div>
+             <!-- Hidden video element for webcam stream -->
+            <video id="webcamVideo" playsinline autoplay muted class="hidden"></video>
 
-    function checkReady() {
-      if (cvReady && domReady) {
-        mainInit();
-      }
-    }
+            <!-- Data Display -->
+            <div class="data-card p-6 rounded-lg shadow-xl">
+                <h2 class="text-xl font-semibold mb-4 text-white">Tracking Data (Robot Control Simulation)</h2>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+                    <div>
+                        <p class="text-sm text-gray-400">Centroid X</p>
+                        <p id="centroidX" class="text-2xl font-mono font-bold text-cyan-400">-</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-400">Area Fraction</p>
+                        <p id="areaFrac" class="text-2xl font-mono font-bold text-cyan-400">-</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-400">Linear Velocity (vx)</p>
+                        <p id="vx" class="text-2xl font-mono font-bold text-green-400">-</p>
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-400">Angular Velocity (wz)</p>
+                        <p id="wz" class="text-2xl font-mono font-bold text-green-400">-</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
 
-    // OpenCV loading with better error handling
-    function loadOpenCV() {
-      const script = document.createElement('script');
-      script.async = true;
-      script.src = 'https://docs.opencv.org/4.x/opencv.js';
-      
-      script.onload = () => {
-        if (typeof cv === 'undefined') {
-          console.log('Waiting for OpenCV to initialize...');
-          setTimeout(() => {
-            if (typeof cv !== 'undefined') {
-              if (cv.getBuildInformation) {
-                cvReady = true;
-                checkReady();
-              } else {
-                cv['onRuntimeInitialized'] = () => {
-                  cvReady = true;
-                  checkReady();
-                };
-              }
+    <script>
+        // --- DOM Elements ---
+        const video = document.getElementById('webcamVideo');
+        const outputCanvas = document.getElementById('outputCanvas');
+        const maskCanvas = document.getElementById('maskCanvas');
+        const outputCtx = outputCanvas.getContext('2d', { willReadFrequently: true });
+        const maskCtx = maskCanvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const outputStatus = document.getElementById('outputStatus');
+        const maskStatus = document.getElementById('maskStatus');
+
+        // --- Data Display Elements ---
+        const centroidXEl = document.getElementById('centroidX');
+        const areaFracEl = document.getElementById('areaFrac');
+        const vxEl = document.getElementById('vx');
+        const wzEl = document.getElementById('wz');
+
+        // --- State and Configuration ---
+        let stream;
+        let animationFrameId;
+
+        // Color detection ranges (copied from the Python script)
+        // Note: OpenCV uses H in [0, 179], S in [0, 255], V in [0, 255]
+        const low1 = { h: 0, s: 120, v: 70 };
+        const high1 = { h: 10, s: 255, v: 255 };
+        const low2 = { h: 170, s: 120, v: 70 };
+        const high2 = { h: 180, s: 255, v: 255 };
+
+        // Control parameters
+        const TARGET_FRAC = 0.020;
+        const TOL_FRAC = 0.004;
+        const TURN_GAIN = 1.2;
+
+        // --- Core Functions ---
+
+        /**
+         * Converts an RGB color value to HSV. Conversion formula
+         * adapted from http://en.wikipedia.org/wiki/HSV_color_space.
+         * Assumes r, g, and b are contained in the set [0, 255] and
+         * returns h in [0, 179], s in [0, 255], and v in [0, 255].
+         */
+        function rgbToHsv(r, g, b) {
+            r /= 255, g /= 255, b /= 255;
+
+            let max = Math.max(r, g, b), min = Math.min(r, g, b);
+            let h, s, v = max;
+            let d = max - min;
+            
+            s = max == 0 ? 0 : d / max;
+
+            if (max == min) {
+                h = 0; // achromatic
+            } else {
+                switch (max) {
+                    case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                    case g: h = (b - r) / d + 2; break;
+                    case b: h = (r - g) / d + 4; break;
+                }
+                h /= 6;
             }
-          }, 100);
-        } else {
-          if (cv.getBuildInformation) {
-            cvReady = true;
-            checkReady();
-          } else {
-            cv['onRuntimeInitialized'] = () => {
-              cvReady = true;
-              checkReady();
-            };
-          }
+            
+            // Scale to OpenCV's ranges
+            return { h: Math.round(h * 179), s: Math.round(s * 255), v: Math.round(v * 255) };
         }
-      };
-      
-      script.onerror = () => {
-        console.error('Failed to load OpenCV.js');
-        document.getElementById('status').textContent = 'Error: Failed to load OpenCV.js';
-      };
-      
-      document.head.appendChild(script);
-    }
 
-    document.addEventListener('DOMContentLoaded', () => {
-      domReady = true;
-      checkReady();
-    });
-
-    // Start loading OpenCV immediately
-    loadOpenCV();
-
-    // ===================== MAIN APP LOGIC =====================
-
-    function mainInit() {
-      console.log('Initializing app with OpenCV version:', cv.getBuildInformation());
-      
-      // ---------- DOM ----------
-      const $ = id => document.getElementById(id);
-      const startBtn     = $('startBtn');
-      const stopBtn      = $('stopBtn');
-      const videoEl      = $('cam');
-      const overlayEl    = $('overlay');
-      const statusEl     = $('status');
-      const vxEl         = $('vx');
-      const wzEl         = $('wz');
-      const maskToggle   = $('maskToggle');
-      const hiddenCanvas = $('hiddenCanvas');
-      const colorPicker  = $('colorPicker');
-
-      // ---------- State ----------
-      let loopActive = false;
-      let stream = null;
-      let cvObjects = {};
-      let trackingParams = {};
-      let isCvInitialized = false;
-
-      videoEl.setAttribute('playsinline','');
-      videoEl.muted = true;
-
-      // ---------- Color helpers ----------
-      function hexToRgb(hex) {
-        const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-        return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : null;
-      }
-      
-      function rgbToHsv(r,g,b) {
-        r/=255; g/=255; b/=255;
-        const max=Math.max(r,g,b), min=Math.min(r,g,b);
-        const d=max-min;
-        let h=0, s=max===0?0:d/max, v=max;
-        if (d !== 0) {
-          switch (max) {
-            case r: h=(g-b)/d + (g<b?6:0); break;
-            case g: h=(b-r)/d + 2; break;
-            default: h=(r-g)/d + 4; break;
-          }
-          h/=6;
-        }
-        return { h: Math.round(h*179), s: Math.round(s*255), v: Math.round(v*255) }; // OpenCV ranges
-      }
-      
-      function setColorThresholds(hexColor) {
-        const rgb = hexToRgb(hexColor);
-        if (!rgb) return;
-        const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
-        const hueTol = 15, minS=50, minV=50;
-        let hmin = hsv.h - hueTol, hmax = hsv.h + hueTol;
-
-        if (hmin < 0) {
-          trackingParams.low1  = [0,   minS, minV, 0];
-          trackingParams.high1 = [hmax,255,  255,  255];
-          trackingParams.low2  = [180+hmin, minS, minV, 0];
-          trackingParams.high2 = [179, 255,  255,  255];
-          trackingParams.useSecondRange = true;
-        } else if (hmax > 179) {
-          trackingParams.low1  = [hmin, minS, minV, 0];
-          trackingParams.high1 = [179,  255,  255,  255];
-          trackingParams.low2  = [0,    minS, minV, 0];
-          trackingParams.high2 = [hmax-180,255,255,255];
-          trackingParams.useSecondRange = true;
-        } else {
-          trackingParams.low1  = [hmin, minS, minV, 0];
-          trackingParams.high1 = [hmax, 255,  255,  255];
-          trackingParams.useSecondRange = false;
-        }
-      }
-
-      // ---------- Cleanup ----------
-      const safeDelete = x => { 
-        try { 
-          if (x && typeof x.delete === 'function') {
-            x.delete(); 
-          }
-        } catch(e) {
-          console.warn('Error deleting OpenCV object:', e);
-        } 
-      };
-      
-      function cleanupCvObjects() {
-        Object.values(cvObjects).forEach(safeDelete);
-        cvObjects = {};
-        trackingParams = {};
-      }
-
-      stopBtn.addEventListener('click', () => {
-        loopActive = false;
-        if (stream) { 
-          stream.getTracks().forEach(t => t.stop()); 
-          stream = null; 
-        }
-        videoEl.srcObject = null;
-        cleanupCvObjects();
-        isCvInitialized = false;
-        statusEl.textContent = 'Camera stopped.';
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        const ctx = overlayEl.getContext('2d');
-        if (ctx) {
-          ctx.clearRect(0, 0, overlayEl.width || 0, overlayEl.height || 0);
-        }
-        vxEl.textContent = '0.00';
-        wzEl.textContent = '0.00';
-      });
-
-      colorPicker.addEventListener('input', () => {
-        if (isCvInitialized) setColorThresholds(colorPicker.value);
-      });
-
-      startBtn.addEventListener('click', async () => {
-        startBtn.disabled = true;
-        stopBtn.disabled = true;
-        loopActive = true;
-        isCvInitialized = false;
-
-        try {
-          statusEl.innerHTML = `
-            <div class="flex items-center">
-              <div class="spinner"></div>
-              <span class="ml-2 font-medium">Starting camera...</span>
-            </div>`;
-
-          // Request camera
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { 
-              width: { ideal: 640 }, 
-              height: { ideal: 480 }, 
-              facingMode: 'user' 
-            },
-            audio: false
-          });
-          
-          videoEl.srcObject = stream;
-
-          // Wait for video to be ready
-          await new Promise((resolve, reject) => {
-            videoEl.onloadedmetadata = resolve;
-            videoEl.onerror = reject;
-            setTimeout(() => reject(new Error('Video loading timeout')), 10000);
-          });
-
-          await videoEl.play();
-          stopBtn.disabled = false;
-          statusEl.textContent = 'Initializing computer vision...';
-
-          // Give video a moment to start streaming
-          await new Promise(resolve => setTimeout(resolve, 500));
-
-          // Main processing loop
-          const hiddenCtx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-          let frameCounter = 0;
-
-          const processFrame = () => {
-            if (!loopActive) return;
-
-            frameCounter++;
-            // Process every 3rd frame for better performance
-            if (frameCounter % 3 !== 0) {
-              requestAnimationFrame(processFrame);
-              return;
-            }
-
-            try {
-              const w = videoEl.videoWidth;
-              const h = videoEl.videoHeight;
-              
-              if (!w || !h) {
-                requestAnimationFrame(processFrame);
+        function processFrame() {
+            if (video.readyState < 2) {
+                animationFrameId = requestAnimationFrame(processFrame);
                 return;
-              }
+            }
 
-              // Initialize OpenCV objects on first frame
-              if (!isCvInitialized) {
-                overlayEl.width = w;
-                overlayEl.height = h;
-                hiddenCanvas.width = w;
-                hiddenCanvas.height = h;
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            
+            // Ensure canvas dimensions match video
+            if(outputCanvas.width !== width || outputCanvas.height !== height){
+                outputCanvas.width = width;
+                outputCanvas.height = height;
+                maskCanvas.width = width;
+                maskCanvas.height = height;
+            }
 
-                // Create OpenCV matrices
-                cvObjects.frame = new cv.Mat(h, w, cv.CV_8UC4);
-                cvObjects.hsv = new cv.Mat(h, w, cv.CV_8UC3);
-                cvObjects.mask1 = new cv.Mat();
-                cvObjects.mask2 = new cv.Mat();
-                cvObjects.mask = new cv.Mat();
-                cvObjects.morphed = new cv.Mat();
-                cvObjects.kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+            // 1. Draw video to output canvas to get pixel data
+            outputCtx.drawImage(video, 0, 0, width, height);
+            const imageData = outputCtx.getImageData(0, 0, width, height);
+            const data = imageData.data;
 
-                setColorThresholds(colorPicker.value);
-                isCvInitialized = true;
-                statusEl.textContent = 'Computer vision active - show colored objects!';
-              }
+            const maskData = maskCtx.createImageData(width, height);
+            const mask = maskData.data;
 
-              // Capture frame
-              hiddenCtx.drawImage(videoEl, 0, 0, w, h);
-              const imageData = hiddenCtx.getImageData(0, 0, w, h);
-              cvObjects.frame.data.set(imageData.data);
+            let pixelCount = 0;
+            let sumX = 0, sumY = 0;
 
-              // Convert to HSV
-              cv.cvtColor(cvObjects.frame, cvObjects.hsv, cv.COLOR_RGBA2RGB);
-              cv.cvtColor(cvObjects.hsv, cvObjects.hsv, cv.COLOR_RGB2HSV);
+            // 2. Process each pixel for color
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                const hsv = rgbToHsv(r, g, b);
 
-              // Create mask
-              const low1 = new cv.Scalar(...trackingParams.low1);
-              const high1 = new cv.Scalar(...trackingParams.high1);
-              cv.inRange(cvObjects.hsv, low1, high1, cvObjects.mask1);
+                let isRed = (hsv.h >= low1.h && hsv.h <= high1.h && hsv.s >= low1.s && hsv.v >= low1.v) ||
+                            (hsv.h >= low2.h && hsv.h <= high2.h && hsv.s >= low2.s && hsv.v >= low2.v);
 
-              if (trackingParams.useSecondRange) {
-                const low2 = new cv.Scalar(...trackingParams.low2);
-                const high2 = new cv.Scalar(...trackingParams.high2);
-                cv.inRange(cvObjects.hsv, low2, high2, cvObjects.mask2);
-                cv.bitwise_or(cvObjects.mask1, cvObjects.mask2, cvObjects.mask);
-                low2.delete();
-                high2.delete();
-              } else {
-                cvObjects.mask1.copyTo(cvObjects.mask);
-              }
+                if (isRed) {
+                    mask[i] = 255;
+                    mask[i + 1] = 255;
+                    mask[i + 2] = 255;
+                    const x = (i / 4) % width;
+                    const y = Math.floor((i / 4) / width);
+                    sumX += x;
+                    sumY += y;
+                    pixelCount++;
+                } else {
+                    mask[i] = 0;
+                    mask[i + 1] = 0;
+                    mask[i + 2] = 0;
+                }
+                mask[i + 3] = 255; // Alpha
+            }
 
-              low1.delete();
-              high1.delete();
+            // 3. Put the generated mask onto the mask canvas
+            maskCtx.putImageData(maskData, 0, 0);
 
-              // Morphological operations
-              cv.morphologyEx(cvObjects.mask, cvObjects.morphed, cv.MORPH_OPEN, cvObjects.kernel);
-              cv.morphologyEx(cvObjects.morphed, cvObjects.morphed, cv.MORPH_CLOSE, cvObjects.kernel);
+            // 4. Calculate centroid and area
+            let cx = 0, cy = 0;
+            let area = 0;
+            if (pixelCount > 0) {
+                cx = Math.round(sumX / pixelCount);
+                cy = Math.round(sumY / pixelCount);
+                area = pixelCount;
+            }
 
-              // Clear overlay
-              const ctx = overlayEl.getContext('2d');
-              ctx.clearRect(0, 0, w, h);
+            // 5. Draw overlays and calculate control commands
+            let vx = 0.0, wz = 0.0;
+            const center_x = width / 2;
+            const img_area = width * height;
+            const area_frac = area / img_area;
+            
+            // Draw center line
+            outputCtx.strokeStyle = 'rgba(255, 255, 0, 0.7)';
+            outputCtx.lineWidth = 2;
+            outputCtx.beginPath();
+            outputCtx.moveTo(center_x, 0);
+            outputCtx.lineTo(center_x, height);
+            outputCtx.stroke();
 
-              let vx = 0, wz = 0;
+            if (area > 50) { // Only process if a significant blob is found
+                // --- Control Logic ---
+                let err_x = (cx - center_x) / center_x;
+                if (Math.abs(err_x) < 0.05) err_x = 0.0;
+                wz = -TURN_GAIN * err_x;
+                wz = Math.max(-1.0, Math.min(1.0, wz));
 
-              if (maskToggle.checked) {
-                // Show mask
-                cv.imshow('overlay', cvObjects.morphed);
-              } else {
-                // Find contours and track object
-                const contours = new cv.MatVector();
-                const hierarchy = new cv.Mat();
-                
-                cv.findContours(cvObjects.morphed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-                
-                if (contours.size() > 0) {
-                  let largestContour = null;
-                  let largestArea = 0;
-                  
-                  for (let i = 0; i < contours.size(); i++) {
-                    const contour = contours.get(i);
-                    const area = cv.contourArea(contour);
-                    
-                    if (area > largestArea && area > 500) { // Minimum area threshold
-                      if (largestContour) largestContour.delete();
-                      largestContour = contour;
-                      largestArea = area;
-                    } else {
-                      contour.delete();
-                    }
-                  }
-                  
-                  if (largestContour) {
-                    const moments = cv.moments(largestContour);
-                    if (moments.m00 > 0) {
-                      const cx = moments.m10 / moments.m00;
-                      const cy = moments.m01 / moments.m00;
-                      
-                      // Calculate control values
-                      let err = (cx - (w/2)) / (w/2);
-                      if (Math.abs(err) < 0.05) err = 0.0;
-                      wz = Math.max(-1, Math.min(1, -1.5 * err));
-                      
-                      const frac = largestArea / (w * h);
-                      const ef = 0.025 - frac;
-                      vx = Math.abs(ef) < 0.005 ? 0.0 : Math.max(-1, Math.min(1, ef / 0.025));
-                      
-                      // Draw center point
-                      ctx.beginPath();
-                      ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
-                      ctx.fillStyle = 'rgba(0, 255, 0, 0.8)';
-                      ctx.fill();
-                      ctx.lineWidth = 3;
-                      ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
-                      ctx.stroke();
-                      
-                      // Draw contour
-                      ctx.strokeStyle = 'rgba(0, 255, 0, 0.6)';
-                      ctx.lineWidth = 2;
-                      ctx.beginPath();
-                      for (let i = 0; i < largestContour.rows; i++) {
-                        const point = largestContour.intAt(i, 0);
-                        if (i === 0) {
-                          ctx.moveTo(point[0], point[1]);
-                        } else {
-                          ctx.lineTo(point[0], point[1]);
-                        }
-                      }
-                      ctx.closePath();
-                      ctx.stroke();
-                    }
-                    largestContour.delete();
-                  }
+                const err_frac = TARGET_FRAC - area_frac;
+                if (Math.abs(err_frac) < TOL_FRAC) {
+                    vx = 0.0;
+                } else {
+                    vx = err_frac / TARGET_FRAC;
+                    vx = Math.max(-1.0, Math.min(1.0, vx));
                 }
                 
-                contours.delete();
-                hierarchy.delete();
-              }
-
-              vxEl.textContent = vx.toFixed(2);
-              wzEl.textContent = wz.toFixed(2);
-
-            } catch (err) {
-              console.error('Error in processing loop:', err);
-              statusEl.textContent = 'Error: ' + err.message;
-              stopBtn.click();
+                // --- Draw Overlays ---
+                // Centroid circle
+                outputCtx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+                outputCtx.beginPath();
+                outputCtx.arc(cx, cy, 8, 0, Math.PI * 2);
+                outputCtx.fill();
+                
+                // Centroid coordinates text
+                outputCtx.fillStyle = 'white';
+                outputCtx.font = '14px Inter';
+                outputCtx.fillText(`(${cx}, ${cy})`, cx + 12, cy + 5);
             }
+            
+            // 6. Update data display
+            centroidXEl.textContent = cx || '-';
+            areaFracEl.textContent = area_frac.toFixed(4);
+            vxEl.textContent = vx.toFixed(2);
+            wzEl.textContent = wz.toFixed(2);
 
-            requestAnimationFrame(processFrame);
-          };
-
-          requestAnimationFrame(processFrame);
-
-        } catch (err) {
-          console.error('Error during startup:', err);
-          statusEl.textContent = 'Error: ' + err.message;
-          startBtn.disabled = false;
-          stopBtn.disabled = true;
-          loopActive = false;
-          if (stream) {
-            stream.getTracks().forEach(t => t.stop());
-            stream = null;
-          }
+            // 7. Loop
+            animationFrameId = requestAnimationFrame(processFrame);
         }
-      });
 
-      // Initial status
-      statusEl.textContent = 'Ready! Click Start to begin.';
-    }
-  </script>
+        async function startWebcam() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                });
+                video.srcObject = stream;
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                outputStatus.style.display = 'none';
+                maskStatus.style.display = 'none';
+                video.onloadedmetadata = () => {
+                    cancelAnimationFrame(animationFrameId);
+                    processFrame();
+                };
+            } catch (error) {
+                console.error("Error accessing webcam:", error);
+                alert("Could not access the webcam. Please ensure you have a webcam and have granted permission.");
+            }
+        }
+
+        function stopWebcam() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            cancelAnimationFrame(animationFrameId);
+            startButton.disabled = false;
+            stopButton.disabled = true;
+
+            // Clear canvases and reset status
+            outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            outputStatus.style.display = 'block';
+            maskStatus.style.display = 'block';
+
+            // Reset data
+            centroidXEl.textContent = '-';
+            areaFracEl.textContent = '-';
+            vxEl.textContent = '-';
+            wzEl.textContent = '-';
+        }
+
+        // --- Event Listeners ---
+        startButton.addEventListener('click', startWebcam);
+        stopButton.addEventListener('click', stopWebcam);
+    </script>
 </body>
 </html>
+
