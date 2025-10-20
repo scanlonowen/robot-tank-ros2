@@ -14,9 +14,13 @@
         button {
             transition: all 0.2s ease-in-out;
         }
-        button:hover {
+        button:hover:not(:disabled) {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
         }
         .data-card {
             background-color: rgba(31, 41, 55, 0.8); /* bg-gray-800 with opacity */
@@ -27,6 +31,9 @@
             position: relative;
             width: 100%;
             padding-top: 75%; /* 4:3 Aspect Ratio */
+            background-color: #111827; /* bg-gray-900 */
+            border-radius: 0.5rem;
+            overflow: hidden;
         }
         canvas {
             position: absolute;
@@ -34,8 +41,6 @@
             left: 0;
             width: 100%;
             height: 100%;
-            border-radius: 0.5rem;
-            background-color: #111827; /* bg-gray-900 */
         }
         .status-text {
             position: absolute;
@@ -109,6 +114,17 @@
         </main>
     </div>
 
+    <!-- Error Modal -->
+    <div id="errorModal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md text-center border border-gray-700">
+            <h3 class="text-2xl font-bold text-red-500 mb-3">Webcam Error</h3>
+            <p id="errorMessage" class="text-gray-300 mb-6">Could not access the webcam.</p>
+            <button id="closeModalButton" class="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75">
+                Close
+            </button>
+        </div>
+    </div>
+
     <script>
         // --- DOM Elements ---
         const video = document.getElementById('webcamVideo');
@@ -120,6 +136,9 @@
         const stopButton = document.getElementById('stopButton');
         const outputStatus = document.getElementById('outputStatus');
         const maskStatus = document.getElementById('maskStatus');
+        const errorModal = document.getElementById('errorModal');
+        const errorMessage = document.getElementById('errorMessage');
+        const closeModalButton = document.getElementById('closeModalButton');
 
         // --- Data Display Elements ---
         const centroidXEl = document.getElementById('centroidX');
@@ -133,15 +152,16 @@
 
         // Color detection ranges (copied from the Python script)
         // Note: OpenCV uses H in [0, 179], S in [0, 255], V in [0, 255]
+        // This range detects the color red, which wraps around the hue spectrum.
         const low1 = { h: 0, s: 120, v: 70 };
         const high1 = { h: 10, s: 255, v: 255 };
         const low2 = { h: 170, s: 120, v: 70 };
         const high2 = { h: 180, s: 255, v: 255 };
 
-        // Control parameters
-        const TARGET_FRAC = 0.020;
-        const TOL_FRAC = 0.004;
-        const TURN_GAIN = 1.2;
+        // Control parameters for robot simulation
+        const TARGET_FRAC = 0.020; // Target size of the object on screen
+        const TOL_FRAC = 0.004; // Tolerance for the target size
+        const TURN_GAIN = 1.2; // How aggressively the robot turns
 
         // --- Core Functions ---
 
@@ -153,13 +173,10 @@
          */
         function rgbToHsv(r, g, b) {
             r /= 255, g /= 255, b /= 255;
-
             let max = Math.max(r, g, b), min = Math.min(r, g, b);
             let h, s, v = max;
             let d = max - min;
-            
             s = max == 0 ? 0 : d / max;
-
             if (max == min) {
                 h = 0; // achromatic
             } else {
@@ -170,7 +187,6 @@
                 }
                 h /= 6;
             }
-            
             // Scale to OpenCV's ranges
             return { h: Math.round(h * 179), s: Math.round(s * 255), v: Math.round(v * 255) };
         }
@@ -184,7 +200,7 @@
             const width = video.videoWidth;
             const height = video.videoHeight;
             
-            // Ensure canvas dimensions match video
+            // Ensure canvas dimensions match video to prevent distortion
             if(outputCanvas.width !== width || outputCanvas.height !== height){
                 outputCanvas.width = width;
                 outputCanvas.height = height;
@@ -192,7 +208,7 @@
                 maskCanvas.height = height;
             }
 
-            // 1. Draw video to output canvas to get pixel data
+            // 1. Draw video to a canvas to access its pixel data
             outputCtx.drawImage(video, 0, 0, width, height);
             const imageData = outputCtx.getImageData(0, 0, width, height);
             const data = imageData.data;
@@ -203,37 +219,34 @@
             let pixelCount = 0;
             let sumX = 0, sumY = 0;
 
-            // 2. Process each pixel for color
+            // 2. Process each pixel for the target color
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
                 const b = data[i + 2];
                 const hsv = rgbToHsv(r, g, b);
 
+                // Check if the pixel's HSV value is within either of the red ranges
                 let isRed = (hsv.h >= low1.h && hsv.h <= high1.h && hsv.s >= low1.s && hsv.v >= low1.v) ||
                             (hsv.h >= low2.h && hsv.h <= high2.h && hsv.s >= low2.s && hsv.v >= low2.v);
 
                 if (isRed) {
-                    mask[i] = 255;
-                    mask[i + 1] = 255;
-                    mask[i + 2] = 255;
+                    mask[i] = 255; mask[i + 1] = 255; mask[i + 2] = 255; // White pixel for the mask
                     const x = (i / 4) % width;
                     const y = Math.floor((i / 4) / width);
                     sumX += x;
                     sumY += y;
                     pixelCount++;
                 } else {
-                    mask[i] = 0;
-                    mask[i + 1] = 0;
-                    mask[i + 2] = 0;
+                    mask[i] = 0; mask[i + 1] = 0; mask[i + 2] = 0; // Black pixel
                 }
                 mask[i + 3] = 255; // Alpha
             }
 
-            // 3. Put the generated mask onto the mask canvas
+            // 3. Display the generated mask on its canvas
             maskCtx.putImageData(maskData, 0, 0);
 
-            // 4. Calculate centroid and area
+            // 4. Calculate the centroid (center of mass) and area of the detected object
             let cx = 0, cy = 0;
             let area = 0;
             if (pixelCount > 0) {
@@ -242,13 +255,13 @@
                 area = pixelCount;
             }
 
-            // 5. Draw overlays and calculate control commands
+            // 5. Draw overlays and calculate simulated robot control commands
             let vx = 0.0, wz = 0.0;
             const center_x = width / 2;
             const img_area = width * height;
             const area_frac = area / img_area;
             
-            // Draw center line
+            // Draw a yellow line indicating the center of the view
             outputCtx.strokeStyle = 'rgba(255, 255, 0, 0.7)';
             outputCtx.lineWidth = 2;
             outputCtx.beginPath();
@@ -256,23 +269,24 @@
             outputCtx.lineTo(center_x, height);
             outputCtx.stroke();
 
-            if (area > 50) { // Only process if a significant blob is found
+            // Only process if a significant blob of color is found
+            if (area > 50) { 
                 // --- Control Logic ---
                 let err_x = (cx - center_x) / center_x;
-                if (Math.abs(err_x) < 0.05) err_x = 0.0;
-                wz = -TURN_GAIN * err_x;
-                wz = Math.max(-1.0, Math.min(1.0, wz));
+                if (Math.abs(err_x) < 0.05) err_x = 0.0; // Deadzone
+                wz = -TURN_GAIN * err_x; // Angular velocity
+                wz = Math.max(-1.0, Math.min(1.0, wz)); // Clamp between -1 and 1
 
                 const err_frac = TARGET_FRAC - area_frac;
-                if (Math.abs(err_frac) < TOL_FRAC) {
+                if (Math.abs(err_frac) < TOL_FRAC) { // Deadzone
                     vx = 0.0;
                 } else {
-                    vx = err_frac / TARGET_FRAC;
-                    vx = Math.max(-1.0, Math.min(1.0, vx));
+                    vx = err_frac / TARGET_FRAC; // Linear velocity
+                    vx = Math.max(-1.0, Math.min(1.0, vx)); // Clamp
                 }
                 
-                // --- Draw Overlays ---
-                // Centroid circle
+                // --- Draw Overlays on the main feed ---
+                // Green circle at the centroid
                 outputCtx.fillStyle = 'rgba(0, 255, 0, 0.8)';
                 outputCtx.beginPath();
                 outputCtx.arc(cx, cy, 8, 0, Math.PI * 2);
@@ -284,38 +298,57 @@
                 outputCtx.fillText(`(${cx}, ${cy})`, cx + 12, cy + 5);
             }
             
-            // 6. Update data display
+            // 6. Update the data display panel
             centroidXEl.textContent = cx || '-';
             areaFracEl.textContent = area_frac.toFixed(4);
             vxEl.textContent = vx.toFixed(2);
             wzEl.textContent = wz.toFixed(2);
 
-            // 7. Loop
+            // 7. Request the next frame to continue the loop
             animationFrameId = requestAnimationFrame(processFrame);
+        }
+
+        function showErrorModal(message) {
+            errorMessage.textContent = message;
+            errorModal.classList.remove('hidden');
         }
 
         async function startWebcam() {
             try {
+                // Request access to the webcam
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: {
-                        facingMode: 'user',
+                        facingMode: 'user', // prefer front-facing camera
                         width: { ideal: 640 },
                         height: { ideal: 480 }
                     },
                     audio: false
                 });
                 video.srcObject = stream;
+                video.play(); // Explicitly tell the video element to start playing
+
+                // Use the 'playing' event listener. It's more reliable than 'onloadedmetadata'
+                // because it guarantees the video has actually started rendering frames.
+                video.addEventListener('playing', () => {
+                    cancelAnimationFrame(animationFrameId); // Clear any previous animation loops
+                    processFrame();
+                }, { once: true }); // The { once: true } option automatically removes the listener after it fires.
+
+
                 startButton.disabled = true;
                 stopButton.disabled = false;
                 outputStatus.style.display = 'none';
                 maskStatus.style.display = 'none';
-                video.onloadedmetadata = () => {
-                    cancelAnimationFrame(animationFrameId);
-                    processFrame();
-                };
+                
             } catch (error) {
                 console.error("Error accessing webcam:", error);
-                alert("Could not access the webcam. Please ensure you have a webcam and have granted permission.");
+                let message = "Could not access the webcam. Please ensure you have a webcam and have granted permission.";
+                if (error.name === 'NotAllowedError') {
+                    message = "Webcam access was denied. Please grant permission in your browser settings and try again.";
+                } else if (error.name === 'NotFoundError') {
+                    message = "No webcam was found. Please ensure a camera is connected and enabled.";
+                }
+                showErrorModal(message);
             }
         }
 
@@ -327,13 +360,13 @@
             startButton.disabled = false;
             stopButton.disabled = true;
 
-            // Clear canvases and reset status
+            // Clear canvases and reset status text
             outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
             maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
             outputStatus.style.display = 'block';
             maskStatus.style.display = 'block';
 
-            // Reset data
+            // Reset data display
             centroidXEl.textContent = '-';
             areaFracEl.textContent = '-';
             vxEl.textContent = '-';
@@ -343,7 +376,11 @@
         // --- Event Listeners ---
         startButton.addEventListener('click', startWebcam);
         stopButton.addEventListener('click', stopWebcam);
+        closeModalButton.addEventListener('click', () => {
+            errorModal.classList.add('hidden');
+        });
     </script>
 </body>
 </html>
+
 
